@@ -1,14 +1,52 @@
 # Estandarización de Roles y Permisos — Eurekant LLC
 
-> **Versión:** 1.1.0 (conceptual — sin SQL)
+> **Versión:** 1.2.0 (conceptual — sin SQL)
 > **Fecha:** 10/06/2026
 > **Estado:** Borrador para validación interna
 > **Alcance:** Todos los proyectos de software desarrollados por Eurekant
 
-| Versión | Fecha | Cambios |
-|---|---|---|
-| 1.0.0 | 09/06/2026 | Versión inicial. |
-| 1.1.0 | 10/06/2026 | Aclaración del término RBAC; referencias cruzadas y sinónimos en el glosario; fusión de RN-03 y RN-04 (regla Owner-admin) con renumeración; justificación del formato de permisos `modulo.accion` y de la tabla `ROLE_PERMISSIONS`. |
+---
+
+## Índice
+
+1. [Propósito y alcance](#1-propósito-y-alcance)
+2. [Principios de diseño](#2-principios-de-diseño)
+3. [Glosario](#3-glosario)
+4. [Modelo de tenancy: Usuario → Empresa → Sucursal](#4-modelo-de-tenancy-usuario--empresa--sucursal)
+   - [4.1 Reglas del modelo de tenancy](#41-reglas-del-modelo-de-tenancy)
+5. [Modelo de roles y permisos](#5-modelo-de-roles-y-permisos)
+   - [5.1 Cómo se compone el acceso](#51-cómo-se-compone-el-acceso)
+   - [5.2 Roles por defecto: `admin` y el concepto de Owner](#52-roles-por-defecto-admin-y-el-concepto-de-owner)
+   - [5.3 Ciclo de vida de los roles](#53-ciclo-de-vida-de-los-roles)
+6. [Modelo de entidades (conceptual)](#6-modelo-de-entidades-conceptual)
+   - [6.1 Notas por entidad](#61-notas-por-entidad)
+7. [Flujos de incorporación de usuarios](#7-flujos-de-incorporación-de-usuarios)
+   - [7.1 Visión global: los tres caminos de entrada](#71-visión-global-los-tres-caminos-de-entrada)
+   - [7.2 Bloque común: verificación de email por OTP](#72-bloque-común-verificación-de-email-por-otp)
+   - [7.3 Camino A — Registro por cuenta propia e *initial setup*](#73-camino-a--registro-por-cuenta-propia-e-initial-setup)
+   - [7.4 Caminos B y C — Invitación: creación y envío](#74-caminos-b-y-c--invitación-creación-y-envío)
+   - [7.5 Camino B — Registro por invitación (usuario nuevo)](#75-camino-b--registro-por-invitación-usuario-nuevo)
+   - [7.6 Camino C — Aceptación directa (usuario existente)](#76-camino-c--aceptación-directa-usuario-existente)
+   - [7.7 Ciclo de vida de una invitación](#77-ciclo-de-vida-de-una-invitación)
+8. [Contexto activo: en qué empresa, sucursal y rol estoy parado](#8-contexto-activo-en-qué-empresa-sucursal-y-rol-estoy-parado)
+9. [RLS: aislamiento de datos sin filtros en el código](#9-rls-aislamiento-de-datos-sin-filtros-en-el-código)
+   - [9.1 El principio](#91-el-principio)
+   - [9.2 Cómo funcionará (conceptual, el detalle va en la v2)](#92-cómo-funcionará-conceptual-el-detalle-va-en-la-v2)
+   - [9.3 Qué ve cada capa](#93-qué-ve-cada-capa)
+10. [Superadmin: la capa del dueño del software](#10-superadmin-la-capa-del-dueño-del-software)
+    - [10.1 Concepto](#101-concepto)
+    - [10.2 Parametrización global (`SYSTEM_SETTINGS`)](#102-parametrización-global-system_settings)
+11. [Reglas de negocio e integridad (resumen normativo)](#11-reglas-de-negocio-e-integridad-resumen-normativo)
+12. [Casos borde y puntos de fuga analizados](#12-casos-borde-y-puntos-de-fuga-analizados)
+13. [Decisiones de diseño y preguntas abiertas](#13-decisiones-de-diseño-y-preguntas-abiertas)
+    - [13.1 Decisiones confirmadas](#131-decisiones-confirmadas)
+    - [13.2 Preguntas abiertas (a definir antes de la v2)](#132-preguntas-abiertas-a-definir-antes-de-la-v2)
+14. [Inspiración y referencias](#14-inspiración-y-referencias)
+15. [Próximos pasos](#15-próximos-pasos)
+16. [Historial de cambios](#16-historial-de-cambios)
+17. [Aprobaciones y auditorías](#17-aprobaciones-y-auditorías)
+    - [17.1 Aprobaciones](#171-aprobaciones)
+    - [17.2 Auditorías y revisiones](#172-auditorías-y-revisiones)
 
 ---
 
@@ -30,7 +68,7 @@ Esta versión es **puramente conceptual**: define entidades, relaciones, flujos 
 1. **Multi-tenant siempre.** Todo sistema soporta múltiples empresas y múltiples sucursales por empresa, **aunque el cliente actual no lo necesite**. Si el software se vende a un solo cliente con una sola sucursal, internamente igual existen `COMPANIES` y `BRANCHES` con un único registro. Esto garantiza escalabilidad sin migraciones traumáticas.
 2. **Aislamiento por RLS, no por filtros.** El código de aplicación **nunca** filtra por empresa/sucursal en sus queries. La base de datos (Row Level Security) devuelve únicamente los datos a los que el usuario tiene acceso según su contexto activo.
 3. **Roles a nivel empresa, asignaciones a nivel sucursal.** Un rol se define una vez por empresa y se reutiliza en todas sus sucursales. La asignación concreta de un usuario es siempre `usuario + rol + sucursal`.
-4. **Permisos granulares.** Un rol no es una etiqueta mágica que el código interpreta: es un **conjunto de permisos** tomados de un catálogo definido por cada sistema. Este es el modelo **RBAC** (*Role-Based Access Control*, control de acceso basado en roles): los permisos nunca se asignan directamente a los usuarios, sino a roles, y los usuarios obtienen sus permisos al recibir roles. Es el modelo clásico que usan Slack, Notion o AWS.
+4. **Permisos granulares.** Un rol no es una etiqueta mágica que el código interpreta: es un **conjunto de permisos** tomados de un catálogo definido por cada sistema. Este es el modelo **RBAC** (*Role-Based Access Control*, control de acceso basado en roles): los permisos nunca se asignan directamente a los usuarios, sino a roles, y los usuarios obtienen sus permisos al recibir roles. En este estándar, los permisos efectivos en cada momento son únicamente los del rol del contexto activo, nunca la suma de todos los roles del usuario (ver §8 y RN-15). Es el modelo clásico que usan Slack, Notion o AWS.
 5. **Identidad global única.** Una persona tiene **una sola cuenta** (un email) y con ella puede pertenecer a N empresas y N sucursales con distintos roles.
 6. **Nada se borra, se desactiva.** Usuarios, roles y vínculos se desactivan (soft delete) para preservar el historial y la auditoría.
 7. **El superadmin vive fuera del modelo de empresas.** Es la capa de los dueños del software, con su propio panel y su propia parametrización global.
@@ -52,9 +90,10 @@ Esta versión es **puramente conceptual**: define entidades, relaciones, flujos 
 | **Asignación (User Role)** | Vínculo `usuario + rol + sucursal`. Es la unidad central del modelo (ver §5.1). |
 | **Owner** | El usuario que creó la empresa. Es admin, pero además es el dueño (único). Diferencias con admin en §5.2. |
 | **Admin** | Rol por defecto, inmutable, con todos los permisos de la empresa. Puede haber varios **usuarios** con este rol en la misma empresa (ver §5.2). |
-| **Superadmin** | Dueño del software (Eurekant o el cliente que lo comercializa). Vista global del sistema (ver §11). |
-| **Contexto activo** | La combinación empresa + sucursal en la que el usuario está operando en este momento (ver §9). También llamado *tenant context* en la literatura; equivale a decir "empresa/sucursal activa". |
-| **Initial setup** | Función interna que popula los datos iniciales al crear una empresa (ver §7). |
+| **Superadmin** | Dueño del software (Eurekant o el cliente que lo comercializa). Vista global del sistema (ver §10). |
+| **Contexto activo** | La asignación con la que el usuario está operando en este momento: `empresa + sucursal + rol` (ver §8). Extiende el *tenant context* de la literatura, incorporando además el rol. |
+| **OTP** | *One-Time Password* (contraseña de un solo uso): código de 6 dígitos enviado por email para verificar la propiedad de la casilla durante el registro. (ver §7.2). |
+| **Initial setup** | Función interna que popula los datos iniciales al crear una empresa (ver §7.3). |
 
 ---
 
@@ -82,7 +121,7 @@ Puntos clave del diagrama:
 - Los roles "Cajero" y "Encargado" de la Empresa A **no existen** en la Empresa B; cada empresa define los suyos (excepto `admin`, que existe en todas).
 
 > 💡 **Ejemplo práctico — multi-rol y multi-empresa**
-> María es contadora. El estudio contable donde trabaja usa un sistema de Eurekant, y además dos de sus clientes (una pizzería y una farmacia) usan el mismo software. María tiene **una sola cuenta** con su email. Dentro del sistema: en "Estudio Contable Pérez" es *Admin*; en "Pizzería Don Carlo" tiene el rol *Contador externo* en la sucursal Centro; y en "Farmacia Vital" tiene el rol *Auditor* en las 3 sucursales. Cuando entra al sistema, elige en qué empresa/sucursal va a trabajar (ver §10, contexto activo).
+> María es contadora. El estudio contable donde trabaja usa un sistema de Eurekant, y además dos de sus clientes (una pizzería y una farmacia) usan el mismo software. María tiene **una sola cuenta** con su email. Dentro del sistema: en "Estudio Contable Pérez" es *Admin*; en "Pizzería Don Carlo" tiene el rol *Contador externo* en la sucursal Centro; y en "Farmacia Vital" tiene el rol *Auditor* en las 3 sucursales. Cuando entra al sistema, elige en qué empresa, sucursal y rol va a trabajar (ver §8, contexto activo).
 
 ### 4.1 Reglas del modelo de tenancy
 
@@ -118,7 +157,8 @@ flowchart LR
 **Asignación.** La unidad central del modelo: `usuario + rol + sucursal`. Reglas:
 
 - Un usuario puede tener **distintos roles en distintas sucursales** de la misma empresa.
-- La sucursal de la asignación **debe pertenecer a la misma empresa** que el rol (regla de integridad obligatoria, ver §12).
+- Un usuario también puede tener **más de un rol en la misma sucursal**; en ese caso los permisos **no se combinan**: el usuario opera con un rol a la vez según su contexto activo (ver §8 y RN-15).
+- La sucursal de la asignación **debe pertenecer a la misma empresa** que el rol (regla de integridad obligatoria, ver §11).
 - Para dar acceso a todas las sucursales, se crea una asignación por sucursal (la UI puede ofrecer un atajo "aplicar a todas las sucursales", pero internamente son N asignaciones).
 
 > 💡 **Ejemplo práctico — armado de un rol**
@@ -280,82 +320,134 @@ erDiagram
 
 **`ROLE_PERMISSIONS`** — Tabla puente rol ↔ permiso. Única por combinación (un rol no puede tener el mismo permiso dos veces). El rol `admin` no necesita filas aquí: sus permisos son "todo el catálogo" por definición (evita tener que actualizarlo cuando se agregan permisos nuevos).
 
-> **¿Por qué una tabla puente y no columnas booleanas en `ROLES`?** La relación rol ↔ permiso es muchos-a-muchos: un rol tiene N permisos y un mismo permiso está en N roles. Modelarlo como columnas (`order_c`, `order_u`, `menu_d`, …) implica que agregar un permiso nuevo requiere un `ALTER TABLE` + migración + tocar la UI, que la tabla `ROLES` sea estructuralmente distinta en cada proyecto (se rompe el estándar) y que la verificación de permisos no pueda ser una función genérica reutilizable. Con la tabla puente, agregar un permiso es un INSERT en el catálogo (la UI de roles lo muestra sola), las tablas son **idénticas en todos los proyectos** (solo cambia el contenido del catálogo) y `fn_has_permission('orders.create')` sirve igual en todos los sistemas. El costo de los joins se absorbe materializando los permisos efectivos en los claims del JWT al armar el contexto activo (§9): se calculan una vez por sesión, no en cada query.
+> **¿Por qué una tabla puente y no columnas booleanas en `ROLES`?** La relación rol ↔ permiso es muchos-a-muchos: un rol tiene N permisos y un mismo permiso está en N roles. Modelarlo como columnas (`order_c`, `order_u`, `menu_d`, …) implica que agregar un permiso nuevo requiere un `ALTER TABLE` + migración + tocar la UI, que la tabla `ROLES` sea estructuralmente distinta en cada proyecto (se rompe el estándar) y que la verificación de permisos no pueda ser una función genérica reutilizable. Con la tabla puente, agregar un permiso es un INSERT en el catálogo (la UI de roles lo muestra sola), las tablas son **idénticas en todos los proyectos** (solo cambia el contenido del catálogo) y `fn_has_permission('orders.create')` sirve igual en todos los sistemas. El costo de los joins se absorbe materializando los permisos del rol activo en los claims del JWT al armar el contexto activo (§8): se calculan al establecer o cambiar el contexto, no en cada query.
 
 **`USER_ROLES`** — El corazón del modelo. Combinación única de `user_id + role_id + branch_id`. Regla de integridad crítica: **la sucursal y el rol deben pertenecer a la misma empresa** (se validará con trigger/función en la v2). Es también la tabla que otras tablas referencian en campos de auditoría como `created_by` (según la convención de nombres, apuntando a `user_role_id`, lo que registra no solo *quién* sino *con qué rol y en qué sucursal* hizo la acción).
 
-**`INVITATIONS`** — Registro completo del flujo de invitación (ver §8). Guarda el rol y la sucursal propuestos, los datos precargados de la persona y el estado del ciclo de vida.
+**`INVITATIONS`** — Registro completo del flujo de invitación (ver §7.4). Guarda el rol y la sucursal propuestos, los datos precargados de la persona y el estado del ciclo de vida.
 
-**`SUPERADMINS`** — Lista blanca de usuarios con acceso global (ver §11). Deliberadamente fuera del modelo de roles de empresa.
+**`SUPERADMINS`** — Lista blanca de usuarios con acceso global (ver §10). Deliberadamente fuera del modelo de roles de empresa.
 
-**`SYSTEM_SETTINGS`** — Parametrización global del software, editable solo desde el panel superadmin (ver §11.2).
+**`SYSTEM_SETTINGS`** — Parametrización global del software, editable solo desde el panel superadmin (ver §10.2).
 
 > 💡 **Ejemplo práctico — `created_by` apuntando a `USER_ROLES`**
 > En el sistema de la pizzería, la tabla `ORDERS` tiene `created_by` → `USER_ROLES.user_role_id`. Cuando se audita una venta sospechosa, no solo se sabe que la hizo Juan: se sabe que la hizo **Juan actuando como Cajero en la sucursal Centro**, aunque hoy Juan ya sea Encargado. El contexto histórico queda congelado.
 
 ---
 
-## 7. Flujo 1 — Registro inicial y *initial setup*
+## 7. Flujos de incorporación de usuarios
+
+Toda persona entra al sistema por **uno de tres caminos**: se registra por cuenta propia (y crea su propia empresa), o es invitada a una empresa existente — con o sin cuenta previa. Los tres caminos comparten los mismos bloques (verificación de email, creación de cuenta, creación de asignación), por eso se documentan juntos: primero la visión global y los bloques comunes, después cada camino en detalle.
+
+### 7.1 Visión global: los tres caminos de entrada
+
+```mermaid
+flowchart TD
+    START["👤 Persona que va a usar el sistema"] --> Q{"¿Cómo llega?"}
+    Q -- "Se registra por<br/>cuenta propia" --> A0["Camino A<br/>Crea su propia empresa"]
+    Q -- "Invitada, SIN<br/>cuenta previa" --> B0["Camino B<br/>Se registra y entra a<br/>una empresa existente"]
+    Q -- "Invitada, CON<br/>cuenta existente" --> C0["Camino C<br/>Acepta y entra a<br/>una empresa existente"]
+
+    A0 --> OTPA["📧 Verificación de email<br/>por OTP (§7.2)"]
+    B0 --> OTPB["📧 Verificación de email<br/>por OTP (§7.2)"]
+    OTPA --> CTAA["Creación de cuenta:<br/>datos personales + contraseña"]
+    OTPB --> CTAB["Creación de cuenta:<br/>datos precargados + contraseña"]
+    CTAA --> SETUP["⚙️ initial setup (§7.3):<br/>crea empresa, sucursal,<br/>rol admin y asignación"]
+    CTAB --> URB["Se crea USER_ROLES con el rol<br/>y sucursal de la invitación"]
+    C0 --> ACC["Acepta la invitación<br/>(login si hace falta)"]
+    ACC --> URC["Se crea USER_ROLES con el rol<br/>y sucursal de la invitación"]
+    SETUP --> FIN["✅ Dentro del sistema<br/>con su contexto activo (§8)"]
+    URB --> FIN
+    URC --> FIN
+```
+
+Qué bloques usa cada camino:
+
+| Bloque | Camino A — Registro propio | Camino B — Invitación (sin cuenta) | Camino C — Invitación (con cuenta) |
+|---|---|---|---|
+| Invitación previa (§7.4) | — | ✔ | ✔ |
+| Verificación de email por OTP (§7.2) | ✔ | ✔ | — (ya verificó su email al crear su cuenta) |
+| Creación de cuenta (datos + contraseña) | ✔ | ✔ (datos precargados por el invitador) | — |
+| *Initial setup* (§7.3) | ✔ | — | — |
+| Creación de asignación (`USER_ROLES`) | ✔ (rol `admin`) | ✔ (rol de la invitación) | ✔ (rol de la invitación) |
+
+La clave para entender los tres caminos: **el camino A es el único que crea una empresa**; B y C entran a una existente. Y el camino B es, en esencia, "el camino A sin *initial setup* y con los datos precargados por quien invitó".
+
+### 7.2 Bloque común: verificación de email por OTP
+
+En los caminos A y B, antes de crear la cuenta, el sistema envía un **OTP** (*One-Time Password*, contraseña de un solo uso): un código numérico de **6 dígitos** que llega al email ingresado y que la persona debe tipear en la pantalla de registro.
+
+Para evitar confusiones, conviene ser explícito sobre qué es y qué no es:
+
+- ✅ **Es** una prueba de propiedad de la casilla: tipear el código demuestra que la persona puede leer ese email, y nada más.
+- ❌ **No es** un código de referido, de descuento ni de activación comercial.
+- ❌ **No es** la contraseña de la cuenta: la contraseña se crea después, en un paso separado del registro.
+- ❌ **No es** un segundo factor de autenticación (2FA): no se vuelve a pedir en los logins futuros.
+
+Reglas del bloque:
+
+- El código tiene **vencimiento corto** y puede reenviarse (cada reenvío invalida el anterior).
+- Los **intentos son limitados** (protección contra fuerza bruta y contra enumeración de cuentas).
+- Es **exactamente el mismo bloque** en los caminos A y B; en el camino B se agrega una validación extra: el email verificado debe **coincidir con el email de la invitación** (ver §7.5).
+- El camino C no lo necesita: ese usuario ya verificó su email cuando creó su cuenta.
+
+### 7.3 Camino A — Registro por cuenta propia e *initial setup*
 
 Cuando una persona se registra **por cuenta propia** (sin invitación), se asume que está creando una empresa nueva y será su administrador y owner.
 
 ```mermaid
 flowchart TD
     A["Persona entra a la pantalla de registro"] --> B["Ingresa su email"]
-    B --> C["Sistema envía código de 6 dígitos al email"]
-    C --> D{"¿Código válido?"}
+    B --> C["📧 Verificación por OTP (§7.2):<br/>código de 6 dígitos al email"]
+    C --> D{"¿OTP válido?"}
     D -- No --> C2["Reintentar / reenviar código"] --> C
     D -- Sí --> E["Completa datos personales:<br/>nombre, apellido, contraseña"]
     E --> F["Completa datos de la empresa:<br/>nombre y datos según el sistema"]
     F --> G["⚙️ initial setup (transacción única en BD)"]
-    G --> G1["Crea USERS"]
-    G --> G2["Crea COMPANIES con owner_id"]
-    G --> G3["Crea BRANCHES 'Principal'"]
-    G --> G4["Crea rol admin (is_default = true)"]
-    G --> G5["Crea USER_ROLES: usuario + admin + sucursal"]
-    G --> G6["Carga datos propios del sistema:<br/>plantillas de roles, categorías, datos demo, etc."]
-    G1 & G2 & G3 & G4 & G5 & G6 --> H["✅ Usuario dentro del sistema<br/>como Owner / Admin de su empresa"]
+    G --> G1["1. Crea USERS<br/>(la cuenta de la persona)"]
+    G1 --> G2["2. Crea COMPANIES<br/>con owner_id → ese usuario"]
+    G2 --> G3["3. Crea BRANCHES 'Principal'"]
+    G3 --> G4["4. Crea rol admin<br/>(is_default = true)"]
+    G4 --> G5["5. Crea USER_ROLES:<br/>usuario + admin + sucursal"]
+    G5 --> G6["6. Carga datos propios del sistema:<br/>plantillas de roles, categorías,<br/>datos demo, etc."]
+    G6 --> H["✅ Usuario dentro del sistema<br/>como Owner / Admin de su empresa"]
 ```
 
 Características del *initial setup*:
 
+- Los pasos se ejecutan **en ese orden** porque cada uno depende del anterior: la empresa necesita al usuario para `owner_id`, la sucursal y el rol necesitan a la empresa, la asignación necesita usuario + rol + sucursal, y los datos propios del sistema (categorías, plantillas, demos) necesitan que la empresa y la sucursal **ya existan**.
 - Es una **función única en la base de datos** que se ejecuta como transacción: o se crea todo, o no se crea nada. Nunca puede quedar una empresa sin sucursal, sin rol admin o sin asignación.
-- Su **núcleo es estándar** en todos los proyectos (empresa + sucursal + admin + asignación). Su **cola es específica** de cada sistema: cada software agrega ahí su carga inicial (categorías de ejemplo, configuración por defecto, datos de demo, roles plantilla).
-- La validación del email con código de 6 dígitos es **obligatoria también en el registro propio**, no solo en el flujo de invitación. El flujo de validación es el mismo en ambos casos.
+- Su **núcleo es estándar** en todos los proyectos (pasos 1–5: usuario, empresa, sucursal, admin, asignación). Su **cola es específica** de cada sistema (paso 6): cada software agrega ahí su carga inicial (categorías de ejemplo, configuración por defecto, datos de demo, roles plantilla).
+- La verificación del email por OTP (§7.2) es **obligatoria también en el registro propio**, no solo en el flujo de invitación.
 
 > 💡 **Ejemplo práctico — initial setup específico por sistema**
 > En el sistema de turnos para clínicas, el *initial setup* además crea: los roles plantilla "Recepcionista" y "Profesional", una agenda de ejemplo y los horarios de atención por defecto. En el sistema de stock, crea: el rol plantilla "Depósito", una categoría "General" y un producto de ejemplo. El núcleo (empresa, sucursal, admin) es idéntico en ambos.
 
----
+### 7.4 Caminos B y C — Invitación: creación y envío
 
-## 8. Flujo 2 — Invitación de usuarios
-
-### 8.1 Visión general: los dos escenarios
-
-Quien tenga el permiso `users.invite` puede invitar personas a una sucursal de su empresa. El sistema distingue dos escenarios según el email ingresado:
+Quien tenga el permiso `users.invite` puede invitar personas a una sucursal de su empresa. El sistema distingue los dos escenarios **al inicio**, según el email ingresado, y cada uno sigue su propio carril hasta el final:
 
 ```mermaid
 flowchart TD
     A["Usuario con permiso users.invite<br/>ingresa el email de la persona"] --> B{"¿El email ya tiene<br/>cuenta en el sistema?"}
-    B -- "Sí (usuario existente)" --> C["Pantalla: seleccionar<br/>sucursal y rol"]
-    C --> D["Se crea INVITATIONS<br/>(sin pedir datos personales)"]
-    B -- "No (usuario nuevo)" --> E["Formulario: datos mínimos<br/>nombre, apellido y esenciales"]
-    E --> F["Seleccionar sucursal y rol"]
+    B -- "Sí → Camino C<br/>(usuario existente)" --> C["Selecciona sucursal y rol<br/>(no se piden datos personales:<br/>ya existen en su cuenta)"]
+    C --> D["Se crea INVITATIONS"]
+    D --> HC["📧 Email con botón 'Aceptar invitación':<br/>quién invita, a qué empresa,<br/>a qué sucursal y con qué rol"]
+    HC --> JC["Aceptación directa (§7.6)"]
+    B -- "No → Camino B<br/>(usuario nuevo)" --> E["Formulario: datos mínimos<br/>(nombre, apellido y esenciales)"]
+    E --> F["Selecciona sucursal y rol"]
     F --> G["Se crea INVITATIONS<br/>con datos precargados"]
-    D & G --> H["📧 Email a la persona invitada:<br/>quién invita, a qué empresa,<br/>a qué sucursal y con qué rol"]
-    H --> I{"¿Tenía cuenta?"}
-    I -- Sí --> J["Acepta la invitación<br/>(login si hace falta)"]
-    J --> K["Se crea USER_ROLES<br/>✅ acceso inmediato"]
-    I -- No --> L["Botón 'Registrarme'<br/>→ flujo de registro por invitación (8.2)"]
+    G --> HB["📧 Email con botón 'Registrarme':<br/>quién invita, a qué empresa,<br/>a qué sucursal y con qué rol"]
+    HB --> JB["Registro por invitación (§7.5)"]
 ```
 
 Notas:
 
-- En ambos escenarios el resultado intermedio es el mismo: una fila en `INVITATIONS` con empresa, sucursal, rol, email y quién invita.
-- La **verificación de existencia** del email debe hacerse de forma segura: el sistema responde internamente si existe o no para ajustar el formulario, pero **no debe exponer** a cualquier usuario una API que permita enumerar qué emails tienen cuenta (punto de fuga clásico, ver §13).
-- Para el usuario existente **no se piden datos personales** (ya los tiene su cuenta); solo confirma la invitación.
+- En ambos escenarios el resultado intermedio es el mismo: una fila en `INVITATIONS` con empresa, sucursal, rol, email y quién invita. Lo que cambia es lo que pasa cuando la persona abre el email: registro completo (camino B) o aceptación directa (camino C).
+- La **verificación de existencia** del email debe hacerse de forma segura: el sistema responde internamente si existe o no para ajustar el formulario, pero **no debe exponer** a cualquier usuario una API que permita enumerar qué emails tienen cuenta (punto de fuga clásico, ver §12).
+- Para el usuario existente **no se piden datos personales** porque ya existen en su cuenta; solo se elige sucursal y rol.
 
-### 8.2 Registro por invitación (usuario nuevo) — paso a paso
+### 7.5 Camino B — Registro por invitación (usuario nuevo)
 
 ```mermaid
 sequenceDiagram
@@ -364,13 +456,13 @@ sequenceDiagram
     actor N as Persona invitada
     I->>S: Ingresa email + nombre/apellido + rol + sucursal
     S->>S: Crea INVITATIONS (status: pending, expira en 7 días)
-    S->>N: 📧 Email: "Carlos te invita a Pizzería Don Carlo,<br/>sucursal Centro, como Cajero" + botón Registrarse
-    N->>S: Click en "Registrarse"
+    S->>N: 📧 Email: "Carlos te invita a Pizzería Don Carlo,<br/>sucursal Centro, como Cajero" + botón Registrarme
+    N->>S: Click en "Registrarme"
     S->>N: Pide el email al que fue invitado
     N->>S: Ingresa el email y toca "Validar correo"
-    S->>N: 📧 Código de 6 dígitos
+    S->>N: 📧 OTP: código de 6 dígitos (§7.2)
     N->>S: Ingresa el código
-    S->>S: ✅ Email validado y coincide con la invitación
+    S->>S: ✅ Email verificado y coincide con la invitación
     S->>N: Muestra datos precargados (nombre, apellido)
     N->>S: Confirma o corrige sus datos
     N->>S: Crea su contraseña
@@ -381,11 +473,25 @@ sequenceDiagram
 
 Detalles importantes:
 
-- El registro por invitación es **el mismo flujo** que el registro por cuenta propia, con tres diferencias: (a) llega por email en vez de iniciarse solo, (b) los datos personales vienen **precargados** por quien invitó y la persona puede corregirlos, y (c) **no se ejecuta el initial setup** ni se piden datos de empresa — la persona entra a una empresa existente, no crea una.
-- El email que la persona valida con el código **debe coincidir** con el email de la invitación. Si no coincide, no se vincula la invitación.
+- El registro por invitación es **el mismo flujo** que el registro por cuenta propia (camino A), con tres diferencias: (a) llega por email en vez de iniciarse solo, (b) los datos personales vienen **precargados** por quien invitó y la persona puede corregirlos, y (c) **no se ejecuta el initial setup** ni se piden datos de empresa — la persona entra a una empresa existente, no crea una.
+- El email que la persona verifica con el OTP **debe coincidir** con el email de la invitación. Si no coincide, no se vincula la invitación.
 - La persona invitada es la dueña final de sus datos: lo que el invitador escribió (nombre, apellido) es solo una sugerencia editable.
 
-### 8.3 Ciclo de vida de una invitación
+### 7.6 Camino C — Aceptación directa (usuario existente)
+
+```mermaid
+flowchart LR
+    A["📧 Click en<br/>'Aceptar invitación'"] --> B["Login<br/>(si no tiene sesión activa)"]
+    B --> C["Validaciones: invitación vigente,<br/>rol y sucursal activos (RN-07)"]
+    C --> D["Se crea USER_ROLES:<br/>usuario + rol + sucursal"]
+    D --> E["✅ Acceso inmediato: la empresa aparece<br/>en su selector de contexto (§8)"]
+```
+
+- No hay OTP ni formulario de datos: la persona ya verificó su email al crear su cuenta y sus datos personales ya existen. Solo acepta (con login de por medio si no tenía sesión abierta).
+- Antes de crear la asignación, el sistema valida que la invitación siga vigente y que el rol y la sucursal sigan activos (RN-07). Si algo fue desactivado en el medio, la invitación se invalida y se notifica a ambas partes.
+- Al aceptar, la nueva empresa/sucursal aparece de inmediato en el selector de contexto del usuario (§8), sin necesidad de cerrar sesión.
+
+### 7.7 Ciclo de vida de una invitación
 
 ```mermaid
 stateDiagram-v2
@@ -411,18 +517,18 @@ Reglas:
 
 ---
 
-## 9. Contexto activo: en qué empresa y sucursal estoy parado
+## 8. Contexto activo: en qué empresa, sucursal y rol estoy parado
 
-Como un usuario puede tener N asignaciones, el sistema necesita saber **cuál está usando ahora**. Ese es el **contexto activo**: una combinación `empresa + sucursal` elegida por el usuario.
+Como un usuario puede tener N asignaciones, el sistema necesita saber **cuál está usando ahora**. Ese es el **contexto activo**: la asignación con la que el usuario está operando — `empresa + sucursal + rol`.
 
 ```mermaid
 flowchart TD
     A["👤 Login de María"] --> B{"¿Cuántas asignaciones<br/>activas tiene?"}
-    B -- "Una sola" --> C["Contexto activo automático:<br/>esa empresa + sucursal"]
-    B -- "Varias" --> D["Selector: lista de empresas<br/>y sucursales disponibles"]
-    D --> E["María elige:<br/>Pizzería Don Carlo / Centro"]
+    B -- "Una sola" --> C["Contexto activo automático:<br/>esa empresa + sucursal + rol"]
+    B -- "Varias" --> D["Selector: lista de asignaciones disponibles<br/>(empresa / sucursal / rol)"]
+    D --> E["María elige:<br/>Pizzería Don Carlo / Centro / Contador externo"]
     C & E --> F["El contexto activo viaja en la sesión<br/>(claims del token JWT)"]
-    F --> G["RLS filtra TODO según ese contexto"]
+    F --> G["RLS filtra TODO según ese contexto;<br/>los permisos son los del rol activo"]
     G --> H["María puede cambiar de contexto<br/>desde el menú, sin re-loguearse"]
     H --> F
 ```
@@ -430,15 +536,19 @@ flowchart TD
 Reglas:
 
 - Si el usuario tiene **una sola** asignación activa, el contexto se establece solo, sin pantalla intermedia (el caso más común: empleados de una sola empresa no deben enterarse de que el sistema es multi-tenant).
-- El contexto activo (y los permisos efectivos del usuario en ese contexto) se materializa en los **claims del token de sesión (JWT)**, para que el RLS pueda evaluarlo sin subconsultas costosas. Este es el patrón recomendado por Supabase y la industria.
+- El selector muestra cada asignación como `empresa / sucursal / rol`. Si el usuario tiene **más de un rol en la misma sucursal**, cada uno aparece como una entrada separada: **los permisos no se combinan** — el usuario opera con un rol a la vez y sus permisos efectivos son exactamente los del rol activo (RN-15). Para usar otro de sus roles, cambia de contexto.
+- El contexto activo (y los permisos del rol activo) se materializa en los **claims del token de sesión (JWT)**, para que el RLS pueda evaluarlo sin subconsultas costosas. Este es el patrón recomendado por Supabase y la industria.
 - Cambiar de contexto refresca el token con los nuevos claims. No requiere cerrar sesión.
 - El sistema recuerda el último contexto usado para preseleccionarlo en el próximo login.
 
+> 💡 **Ejemplo práctico — multi-rol sin combinación de permisos**
+> En la sucursal Centro, Laura es *Cajera* y también *Responsable de caja fuerte*. Operando como Cajera **no puede** abrir la caja fuerte, aunque "tenga" el otro rol: para eso cambia su contexto al rol Responsable. Esto mantiene la coherencia con la auditoría (RN-14): como `created_by` apunta a la asignación (`USER_ROLES`), cada acción queda registrada sin ambigüedad con el rol exacto con el que se hizo.
+
 ---
 
-## 10. RLS: aislamiento de datos sin filtros en el código
+## 9. RLS: aislamiento de datos sin filtros en el código
 
-### 10.1 El principio
+### 9.1 El principio
 
 **El código de aplicación nunca filtra por empresa o sucursal.** Cuando el frontend o el backend consulta una tabla, escribe la query "ingenua" (`select * from PRODUCTS`) y la base de datos, mediante Row Level Security, devuelve **solo** las filas que el contexto activo del usuario puede ver.
 
@@ -459,16 +569,16 @@ flowchart LR
 > 💡 **Ejemplo práctico — el caso de los 100 productos**
 > En la tabla `PRODUCTS` hay 100 productos de 5 empresas distintas. Juan (Cajero de la Pizzería, sucursal Centro) consulta la tabla **sin ningún filtro** y recibe exactamente los 12 productos de la pizzería. No hay forma de que reciba otros: aunque un desarrollador se olvide de todo, aunque la query venga de un script externo con el token de Juan, el RLS está en la base y es la última línea de defensa. El clásico bug de "me olvidé el `where company_id = ...`" **deja de existir como categoría de bug**.
 
-### 10.2 Cómo funcionará (conceptual, el detalle va en la v2)
+### 9.2 Cómo funcionará (conceptual, el detalle va en la v2)
 
 - Toda tabla operativa lleva `company_id` (y `branch_id` cuando su alcance es por sucursal). Estas columnas estarán **indexadas** siempre — es el principal factor de performance del RLS.
-- Las políticas comparan esas columnas contra el **contexto activo en los claims del JWT** (empresa, sucursal y permisos), evitando subconsultas pesadas en cada fila.
+- Las políticas comparan esas columnas contra el **contexto activo en los claims del JWT** (empresa, sucursal, rol y sus permisos), evitando subconsultas pesadas en cada fila.
 - El RLS cubre los cuatro verbos: lectura (qué filas veo), inserción (no puedo insertar filas de otra empresa — cláusula de verificación), actualización y borrado.
 - Los **permisos** también se evalúan en la base cuando corresponde: por ejemplo, insertar en `PRODUCTS` exige el permiso `products.create` en el contexto activo, no solo pertenecer a la empresa. Habrá funciones auxiliares estándar (`fn_has_permission`, etc.) reutilizables en todos los proyectos.
 - **Alcance empresa vs. sucursal según la tabla:** hay tablas donde todos los miembros de la empresa ven lo mismo (ej: catálogo de productos) y tablas donde solo se ve lo de la propia sucursal (ej: cajas, stock). Cada sistema define el alcance de cada tabla; el estándar provee ambos patrones de política.
 - **Trade-off conocido:** como los permisos viajan en el JWT, un cambio de rol/permisos tarda hasta la expiración del token en aplicarse (minutos). Para acciones críticas (desactivar un usuario) se complementa con verificación en base, que es inmediata. Este trade-off es estándar en la industria.
 
-### 10.3 Qué ve cada capa
+### 9.3 Qué ve cada capa
 
 | Capa | Responsabilidad sobre el acceso |
 |---|---|
@@ -478,9 +588,9 @@ flowchart LR
 
 ---
 
-## 11. Superadmin: la capa del dueño del software
+## 10. Superadmin: la capa del dueño del software
 
-### 11.1 Concepto
+### 10.1 Concepto
 
 El **superadmin** no es un rol de empresa: es una capa completamente separada para los dueños del software (Eurekant o el cliente que comercializa el sistema). Vive en su propia tabla (`SUPERADMINS`), tiene su propio panel (back-office) y **no aparece como miembro de ninguna empresa**.
 
@@ -505,10 +615,10 @@ Capacidades del superadmin (lista inicial, ampliable por sistema):
 
 - **Métricas y monitoreo:** cantidad de empresas y su estado, usuarios totales y activos, métricas de uso, horarios de mayor actividad, crecimiento.
 - **Gestión de tenants:** ver, activar y suspender empresas (ej: por falta de pago).
-- **Parametrización global:** todo lo configurable del software se configura acá (ver §11.2).
+- **Parametrización global:** todo lo configurable del software se configura acá (ver §10.2).
 - El RLS lo trata con **políticas especiales explícitas**: el superadmin ve los datos globales y agregados que su panel necesita. Importante: el acceso superadmin **no es un bypass silencioso**, sino políticas deliberadas y auditables.
 
-### 11.2 Parametrización global (`SYSTEM_SETTINGS`)
+### 10.2 Parametrización global (`SYSTEM_SETTINGS`)
 
 Todo valor del sistema que pueda cambiar sin redeploy se guarda como parámetro clave-valor, editable solo desde el panel superadmin: comisiones (ej: `mercadopago.commission`), días de expiración de invitaciones (`invitations.expiration_days`), límites, textos legales, banderas de funcionalidades, etc.
 
@@ -520,7 +630,7 @@ Todo valor del sistema que pueda cambiar sin redeploy se guarda como parámetro 
 
 ---
 
-## 12. Reglas de negocio e integridad (resumen normativo)
+## 11. Reglas de negocio e integridad (resumen normativo)
 
 Estas reglas son **obligatorias** en todos los proyectos. En la v2, cada una se implementará con constraints, triggers o funciones.
 
@@ -540,10 +650,11 @@ Estas reglas son **obligatorias** en todos los proyectos. En la v2, cada una se 
 | RN-12 | El catálogo `PERMISSIONS` solo lo modifica el equipo de desarrollo (datos semilla); las empresas no lo editan. |
 | RN-13 | El acceso superadmin se define en políticas explícitas y auditables, nunca como bypass genérico. |
 | RN-14 | Los campos de auditoría (`created_by`, `updated_by`) referencian `USER_ROLES`, no `USERS`, para congelar el contexto (quién, con qué rol, en qué sucursal). |
+| RN-15 | Un usuario puede tener varios roles en la misma sucursal, pero los permisos **nunca se combinan**: se opera bajo un único rol a la vez — el contexto activo incluye el rol (ver §8). |
 
 ---
 
-## 13. Casos borde y puntos de fuga analizados
+## 12. Casos borde y puntos de fuga analizados
 
 Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 
@@ -553,41 +664,44 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 | Invitación aceptada después de que el rol/sucursal fue eliminado | Asignación rota o acceso a algo inexistente | Validación al aceptar (RN-07): la invitación se invalida y se notifica para regenerarla. |
 | Todos los admins se van de la empresa | Empresa inaccesible para siempre | RN-03 (regla Owner-admin): el Owner siempre es admin y nadie puede quitarle el rol, así que siempre hay al menos un admin. |
 | Eliminar un rol en uso | Usuarios sin acceso de un día para el otro | RN-06: eliminación bloqueada hasta reasignar. |
-| Usuario desvinculado conserva token JWT vigente | Acceso residual por minutos | Trade-off conocido (§10.2): tokens de vida corta + verificación en base para acciones críticas. |
-| Dos roles distintos del mismo usuario en la misma sucursal | Ambigüedad de permisos | Permitido: los permisos efectivos son la **unión** de ambos roles. (Decisión a validar, ver §14.2.) |
+| Usuario desvinculado conserva token JWT vigente | Acceso residual por minutos | Trade-off conocido (§9.2): tokens de vida corta + verificación en base para acciones críticas. |
+| Dos roles distintos del mismo usuario en la misma sucursal | Ambigüedad de permisos | Permitido, **sin combinar permisos**: el usuario opera con un rol a la vez; el contexto activo incluye el rol (§8, RN-15). |
 | Sistemas "chicos" que no usan sucursales | Tentación de simplificar el modelo y romper el estándar | Prohibido por principio 1: siempre existen `COMPANIES` y `BRANCHES`, aunque tengan una fila. La UI puede ocultar el concepto. |
 | Empresa suspendida (ej: falta de pago) | Usuarios siguen operando | `COMPANIES.is_active = false` corta el acceso vía RLS a todos sus miembros de inmediato, sin tocar sus asignaciones. |
-| Invitador escribe mal los datos del invitado | Datos incorrectos permanentes | La persona invitada revisa y corrige sus datos al registrarse (§8.2). |
+| Invitador escribe mal los datos del invitado | Datos incorrectos permanentes | La persona invitada revisa y corrige sus datos al registrarse (§7.5). |
 | Sucursal desactivada con usuarios asignados | Asignaciones colgando de algo inactivo | Las asignaciones de esa sucursal quedan inactivas en cascada lógica; si un usuario queda sin ninguna asignación activa, no puede ingresar a esa empresa. |
 | Borrado físico de usuarios | Historial y auditoría rotos | RN-08 y RN-14: soft delete + auditoría sobre `USER_ROLES`. |
 | Mismo nombre de rol en empresas distintas | Colisión de nombres | No hay colisión: la unicidad es por empresa (RN-10). |
 
 ---
 
-## 14. Decisiones de diseño y preguntas abiertas
+## 13. Decisiones de diseño y preguntas abiertas
 
-### 14.1 Decisiones confirmadas (validadas con Franco, 09/06/2026)
+### 13.1 Decisiones confirmadas
+
+Decisiones 1–8 validadas con Franco el 09/06/2026; decisión 9, el 10/06/2026.
 
 1. **Permisos granulares** con catálogo por sistema; los roles agrupan permisos.
-2. **Contexto activo seleccionable**: una cuenta global, selector de empresa/sucursal, cambio sin re-login.
+2. **Contexto activo seleccionable**: una cuenta global, selector de asignaciones (empresa/sucursal/rol), cambio sin re-login.
 3. **Eliminación de roles bloqueada** si hay usuarios asignados; todo soft delete.
 4. **Superadmin como modelo separado** (tabla y panel propios, fuera del modelo de empresas).
 5. **Multi-admin con Owner**: varios admins posibles; el creador queda marcado como Owner único.
 6. **Asignación solo por sucursal** (la UI puede ofrecer "aplicar a todas").
 7. **Invitaciones que expiran (7 días) y son revocables**, con estados auditables.
 8. **Baja de usuarios por desactivación** (soft delete) con historial intacto.
+9. **Multi-rol en la misma sucursal, sin combinación de permisos**: un usuario puede tener varios roles en la misma sucursal, pero cada rol mantiene sus propios permisos; se opera con un rol a la vez vía contexto activo (RN-15, §8).
 
-### 14.2 Preguntas abiertas (a definir antes de la v2)
+### 13.2 Preguntas abiertas (a definir antes de la v2)
 
-1. **Multi-rol en la misma sucursal:** ¿confirmamos que un usuario puede tener 2+ roles en la misma sucursal (permisos = unión)? Propuesta: sí, simplifica casos como "Cajero" + "Responsable de caja fuerte". Alternativa: limitar a un rol por sucursal.
-2. **Transferencia de ownership:** ¿hace falta un flujo con confirmación del receptor (acepta ser Owner) o alcanza con la acción unilateral del Owner actual?
-3. **Permisos a nivel empresa vs. sucursal en `SYSTEM_SETTINGS`:** ¿algunos parámetros podrán tener override por empresa (ej: comisión especial negociada con un cliente grande)? Propuesta: contemplar un alcance opcional por empresa en la v2.
-4. **Auditoría formal:** ¿incluimos en el estándar una tabla de log de eventos sensibles (cambios de roles, invitaciones, transferencias de ownership)? Propuesta: sí, como entidad estándar en la v2.
-5. **Invitaciones masivas:** ¿se necesita invitar por lote (CSV / múltiples emails)? Puede diseñarse después sin tocar el modelo.
+1. **Transferencia de ownership:** ¿hace falta un flujo con confirmación del receptor (acepta ser Owner) o alcanza con la acción unilateral del Owner actual?
+2. **Permisos a nivel empresa vs. sucursal en `SYSTEM_SETTINGS`:** ¿algunos parámetros podrán tener override por empresa (ej: comisión especial negociada con un cliente grande)? Propuesta: contemplar un alcance opcional por empresa en la v2.
+3. **Auditoría formal:** ¿incluimos en el estándar una tabla de log de eventos sensibles (cambios de roles, invitaciones, transferencias de ownership)? Propuesta: sí, como entidad estándar en la v2.
+4. **Invitaciones masivas:** ¿se necesita invitar por lote (CSV / múltiples emails)? Puede diseñarse después sin tocar el modelo.
+5. **Tablas operativas y desnormalización del tenant** (en análisis desde el 10/06/2026): definir formalmente qué es una "tabla operativa" y documentar el análisis de normalización de la columna `company_id` redundante (pros/contras, prevención de inconsistencias con FKs compuestas y `WITH CHECK`). Pendiente de discusión.
 
 ---
 
-## 15. Inspiración y referencias
+## 14. Inspiración y referencias
 
 El modelo sigue los patrones de la industria para SaaS multi-tenant:
 
@@ -596,8 +710,43 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 - Aislamiento por columna de tenant + RLS como última línea de defensa, con claims en JWT e índices sobre las columnas de tenant: [Permit.io — Best practices for multi-tenant authorization](https://www.permit.io/blog/best-practices-for-multi-tenant-authorization), [Clerk — Multi-tenant SaaS architecture](https://clerk.com/blog/how-to-design-multitenant-saas-architecture), [Supabase — Custom claims & RLS](https://github.com/orgs/supabase/discussions/1148).
 - Nomenclatura de base de datos: [Eurekant Naming Convention Guide](https://app.clickup.com/9002039309/v/dc/8c90e0d-10194/8c90e0d-6114).
 
-## 16. Próximos pasos
+---
 
-1. Validar este documento con el equipo (especialmente §14.2).
+## 15. Próximos pasos
+
+1. Validar este documento con el equipo (especialmente §13.2).
 2. **v2:** DDL completo en SQL — tablas, constraints, índices, funciones (`fn_initial_setup`, `fn_has_permission`), triggers de integridad (RN-03, RN-04) y políticas RLS, todo según la Naming Convention Guide.
 3. **v3:** kit reutilizable (migraciones base + seeds del catálogo de permisos) para iniciar cualquier proyecto nuevo de Eurekant con este cimiento ya instalado.
+
+---
+
+## 16. Historial de cambios
+
+| Versión | Fecha | Cambios |
+|---|---|---|
+| 1.0.0 | 09/06/2026 | Versión inicial. |
+| 1.1.0 | 10/06/2026 | Aclaración del término RBAC; referencias cruzadas y sinónimos en el glosario; fusión de RN-03 y RN-04 (regla Owner-admin) con renumeración; justificación del formato de permisos `modulo.accion` y de la tabla `ROLE_PERMISSIONS`. |
+| 1.2.0 | 10/06/2026 | Índice del documento; unificación de los flujos de registro e invitación en una sola sección (§7) con visión global, bloques comunes y un camino por subsección; aclaración del OTP de verificación de email (no es código de referido); orden secuencial del *initial setup* según dependencias; corrección del diagrama de invitaciones (carriles separados por escenario); el contexto activo pasa a incluir el rol — multi-rol en la misma sucursal sin combinación de permisos (nueva RN-15); historial de cambios, aprobaciones y auditorías al final del documento. |
+
+---
+
+## 17. Aprobaciones y auditorías
+
+### 17.1 Aprobaciones
+
+Una fila por aprobador y por versión mayor o menor del documento. El documento pasa de "Borrador" a "Vigente" cuando todas las aprobaciones de la versión están en estado *Aprobado*.
+
+| Versión | Rol | Nombre | Fecha | Estado |
+|---|---|---|---|---|
+| 1.2.0 | CEO | — | — | Pendiente |
+| 1.2.0 | CTO | — | — | Pendiente |
+| 1.2.0 | Líder técnico | — | — | Pendiente |
+
+### 17.2 Auditorías y revisiones
+
+Registro de cada revisión del documento, haya derivado o no en un cambio de versión.
+
+| Fecha | Revisor | Alcance | Resultado | Observaciones |
+|---|---|---|---|---|
+| 09/06/2026 | Franco Cruz | Documento completo (v1.0.0) | Cambios solicitados | Feedback que originó la v1.1.0. |
+| 10/06/2026 | Franco Cruz | Documento completo (v1.1.0) | Cambios solicitados | 8 puntos de revisión que originaron la v1.2.0. El análisis de tablas operativas/normalización quedó pendiente (§13.2, punto 5). |
