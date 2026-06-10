@@ -1,6 +1,6 @@
 # Estandarización de Roles y Permisos — Eurekant LLC
 
-> **Versión:** 1.4.1 (conceptual — sin SQL)
+> **Versión:** 1.5.0 (conceptual — sin SQL)
 > **Fecha:** 10/06/2026
 > **Estado:** Borrador para validación interna
 > **Alcance:** Todos los proyectos de software desarrollados por Eurekant
@@ -29,6 +29,7 @@
    - [7.6 Camino B — Registro por invitación (usuario nuevo)](#76-camino-b--registro-por-invitación-usuario-nuevo)
    - [7.7 Camino C — Aceptación o rechazo (usuario existente)](#77-camino-c--aceptación-o-rechazo-usuario-existente)
 8. [Contexto activo: en qué empresa, sucursal y rol estoy parado](#8-contexto-activo-en-qué-empresa-sucursal-y-rol-estoy-parado)
+   - [8.1 Política de sesiones y renovación de tokens](#81-política-de-sesiones-y-renovación-de-tokens)
 9. [RLS: aislamiento de datos sin filtros en el código](#9-rls-aislamiento-de-datos-sin-filtros-en-el-código)
    - [9.1 El principio](#91-el-principio)
    - [9.2 Cómo funcionará (conceptual, el detalle va en la v2)](#92-cómo-funcionará-conceptual-el-detalle-va-en-la-v2)
@@ -94,6 +95,7 @@ Esta versión es **puramente conceptual**: define entidades, relaciones, flujos 
 | **Superadmin** | Dueño del software (Eurekant o el cliente que lo comercializa). Vista global del sistema (ver §10). |
 | **Contexto activo** | La asignación con la que el usuario está operando en este momento: `empresa + sucursal + rol` (ver §8). Extiende el *tenant context* de la literatura, incorporando además el rol. |
 | **JWT / Claims** | *JSON Web Token*: el token de sesión firmado que la aplicación adjunta en cada petición después del login. Los *claims* son los datos que viajan dentro del token (quién es el usuario, cuándo expira la sesión y, en este modelo, el contexto activo con los permisos de su rol). Al estar firmado, no puede alterarse sin invalidarlo (ver §8). |
+| **Refresh token** | Credencial de larga vida que acompaña al JWT: cuando el JWT vence, el SDK la canjea automáticamente por un par nuevo (JWT + refresh token). Es de un solo uso, no vence por tiempo, y es lo que mantiene la sesión iniciada (ver §8.1). |
 | **OTP** | *One-Time Password* (contraseña de un solo uso): código de 6 dígitos enviado por email para verificar la propiedad de la casilla durante el registro. (ver §7.2). |
 | **Enumeración de cuentas** | Ataque que consiste en probar emails ajenos en pantallas públicas (registro, invitaciones) para descubrir quién tiene cuenta en el sistema, a partir de diferencias en la respuesta. Se previene respondiendo siempre lo mismo y revelando información solo a quien verificó la casilla (ver §7.3 y §12). |
 | **Initial setup** | Función interna que popula los datos iniciales al crear una empresa (ver §7.3). |
@@ -439,9 +441,21 @@ Resolución del email después del OTP:
 - **El OTP se envía siempre y la respuesta pública es idéntica**, exista o no la cuenta. La "respuesta pública" es todo lo que puede observar alguien que **no** tiene acceso a la casilla: los mensajes en pantalla, las respuestas de la API e incluso los tiempos de respuesta. La existencia de una cuenta o de una invitación pendiente se revela **únicamente después de validar el OTP**, es decir, solo a quien ya demostró ser dueño de la casilla. Así la pantalla de registro no sirve para la enumeración de cuentas (mismo criterio que en §7.4; ver §12).
 - **Usuario existente que crea otra empresa.** Si el email ya tiene cuenta, la persona inicia sesión con su contraseña dentro del mismo flujo y pasa directo a los datos de la empresa: el *initial setup* omite el paso 1 y la empresa nueva queda con su usuario existente como Owner (un usuario puede ser owner de N empresas). Esto ocurre **siempre desde la pantalla de registro, nunca desde adentro de la app**: dentro del software la persona opera en el contexto de una empresa —que puede ser ajena—, y un botón "crear mi propia empresa" ahí sería confuso (ej: un contador externo trabajando en el sistema de su cliente no debería ver esa opción).
 - **Invitación pendiente detectada.** Se ofrece aceptarla en ese momento (sigue por el camino B o C, según tenga cuenta o no) o continuar con el registro propio; en ese caso la invitación queda pendiente y puede aceptarse más adelante. Si la acepta en ese momento, el bloque OTP **no se repite**: la casilla ya quedó verificada en este mismo flujo. No son opciones excluyentes: la persona puede terminar siendo Owner de su empresa **y** miembro de la empresa que la invitó.
+- **Requisito de UI — transparencia en dos momentos.** Antes del OTP, un único mensaje corto: la pantalla avisa que el email se va a verificar para continuar, **sin enumerar los casos especiales** (la gran mayoría son usuarios nuevos; listar situaciones que no les aplican es ruido). Ej: *"Ingresá tu email: te enviaremos un código de 6 dígitos para verificarlo y continuar."* Después del OTP, **cada caso detectado tiene su propia pantalla** con un mensaje específico (tabla siguiente). Esta transparencia es hacia quien tipea, sobre su propio email —no revela nada de otras cuentas— y evita que la resolución post-OTP se sienta como una traba inesperada.
+
+Pantallas de la resolución post-OTP, según el caso detectado:
+
+| Caso detectado tras el OTP | Pantalla y mensaje (ejemplo) |
+|---|---|
+| Email nuevo | Continúa el flujo normal, sin avisos extra. |
+| Ya tiene cuenta | *"Este email ya tiene una cuenta. Ingresá tu contraseña y vas a poder crear tu nueva empresa con tu cuenta ya existente."* |
+| Tiene invitación pendiente (sin cuenta) | *"Tenés una invitación pendiente de **Pizzería Don Carlo** como **Cajero**. Podés aceptarla (§7.6) o continuar creando tu propia empresa — la invitación te queda pendiente para después."* |
+| Ya tiene cuenta **y** además invitación pendiente | Primero la oferta de la invitación (igual que arriba); elija lo que elija, después inicia sesión con su contraseña: aceptar sigue por el camino C (§7.7), continuar crea la empresa nueva con su cuenta ya existente. |
 
 > 💡 **Ejemplo práctico — por qué la respuesta debe ser idéntica**
 > Un atacante quiere saber si `gerente@clinicavital.com` usa el sistema. Va a la pantalla de registro y escribe ese email. Si el sistema respondiera "este email ya está registrado", el atacante acaba de confirmar su objetivo sin necesitar ninguna contraseña: ya sabe a quién dirigir un phishing. Con la respuesta idéntica, escriba el email que escriba, siempre observa lo mismo ("te enviamos un código") — y como no puede leer la casilla del gerente, no pasa de ahí. La información solo aparece para quien tipea el código correcto: el dueño real del email.
+
+> **Nota — por qué el criterio estricto y no el aviso inmediato de "ya tenés cuenta".** Parte de la industria (Google, GitHub, Microsoft) revela la existencia de la cuenta en el registro y lo compensa con mitigaciones (rate limiting, CAPTCHA). Acá se mantiene el criterio estricto que recomienda OWASP —el mismo patrón *email-first* de Slack y Notion— por tres razones: el OTP es obligatorio de todas formas, así que la regla **no agrega fricción**; Supabase lo implementa de fábrica (con confirmación de email activada, registrarse con un email existente no revela nada); y los sistemas de Eurekant pueden manejar rubros sensibles (ej: salud), donde la existencia de una cuenta ya es un dato. El estándar de rate limiting y anti-automatización queda pendiente de análisis (§13.2).
 
 > 💡 **Ejemplo práctico — initial setup específico por sistema**
 > En el sistema de turnos para clínicas, el *initial setup* además crea: los roles plantilla "Recepcionista" y "Profesional", una agenda de ejemplo y los horarios de atención por defecto. En el sistema de stock, crea: el rol plantilla "Depósito", una categoría "General" y un producto de ejemplo. El núcleo (empresa, sucursal, admin) es idéntico en ambos.
@@ -580,14 +594,38 @@ Reglas:
 - Si el usuario tiene **una sola** asignación activa, el contexto se establece solo, sin pantalla intermedia (el caso más común: empleados de una sola empresa no deben enterarse de que el sistema es multi-tenant).
 - El selector muestra cada asignación como `empresa / sucursal / rol`. Si el usuario tiene **más de un rol en la misma sucursal**, cada uno aparece como una entrada separada: **los permisos no se combinan** — el usuario opera con un rol a la vez y sus permisos efectivos son exactamente los del rol activo (RN-15). Para usar otro de sus roles, cambia de contexto.
 - El contexto activo (y los permisos del rol activo) se materializa en los **claims del token de sesión (JWT)**, para que el RLS pueda evaluarlo sin subconsultas costosas. Este es el patrón recomendado por Supabase y la industria.
-- Cambiar de contexto refresca el token con los nuevos claims. No requiere cerrar sesión.
+- Cambiar de contexto refresca el token con los nuevos claims (`refreshSession()`, ver §8.1). No requiere cerrar sesión.
 - El sistema recuerda el último contexto usado para preseleccionarlo en el próximo login.
 
 > 💡 **Ejemplo práctico — el token como credencial de evento**
 > El JWT funciona como la credencial impresa de un congreso. Al acreditarse (login + elección de contexto), la persona recibe una credencial con sus datos a la vista: quién es, empresa, sucursal, rol y sus permisos — los *claims*. El guardia de cada puerta (cada política RLS) mira la credencial y decide al instante, sin llamar a la oficina central (sin consultar las tablas de roles) cada vez. Y la credencial está firmada: si alguien intenta agregarse un permiso a mano, la firma deja de coincidir y el sistema la rechaza.
+>
+> **¿Cómo funciona esa firma?** El token tiene tres partes: `cabecera.datos.firma`. Los datos (los claims) **no están cifrados** — cualquiera con el token puede leerlos. Lo que los protege es la firma: el servidor la calcula pasando el contenido exacto del token por una función matemática junto con una **clave secreta que nunca sale del servidor**. Cualquier cambio en los datos, por mínimo que sea, produce una firma completamente distinta. Si alguien edita los claims, el contenido ya no coincide con la firma y la base rechaza el token entero — y el atacante no puede recalcular la firma correcta porque no tiene la clave. Como un cheque: cualquiera lee el monto, pero alterarlo se nota, y no se puede volver a firmar con la firma de otro.
 
 > 💡 **Ejemplo práctico — multi-rol sin combinación de permisos**
 > En el sistema de turnos de la clínica, la Dra. Paredes tiene dos roles en la misma sucursal: **Profesional** (atiende turnos y carga evoluciones en las historias clínicas de sus pacientes) y **Directora médica** (ve reportes, aprueba reintegros y accede a historias clínicas de otros profesionales). Atendiendo pacientes opera como Profesional: no ve reportes ni historias ajenas, aunque "tenga" el otro rol. Para la revisión mensual cambia su contexto a Directora médica. La ventaja es doble: **separación de funciones** — sus tareas cotidianas no cargan privilegios elevados, el mismo principio por el que un administrador de sistemas no usa root para el día a día — y **auditoría inequívoca** (RN-14): si aprueba un reintegro o corrige una historia clínica ajena, el registro (`created_by`/`updated_by` → `USER_ROLES`) muestra que lo hizo actuando como Directora médica, no como Profesional.
+
+### 8.1 Política de sesiones y renovación de tokens
+
+El JWT corto y la sesión larga son **dos cosas distintas que se resuelven con mecanismos distintos**. El error histórico (heredado de la época de FlutterFlow, cuya autenticación custom cerraba la sesión al vencer el token sin dar ventana de refresh) era estirar la vida del JWT a 7 días para que la sesión durara. En Flutter nativo eso no es necesario: el SDK oficial (`supabase_flutter`) renueva el token automáticamente, y la duración de la sesión la gobiernan los **refresh tokens**.
+
+| Parámetro | Valor estándar | Dónde se configura |
+|---|---|---|
+| Vida del JWT (access token) | **3600 s (1 hora)** — el default de Supabase. Sistemas sensibles pueden bajarlo (hasta 15–30 min); nunca menos de 5 min. **Nunca se sube para alargar sesiones.** | Configuración del proyecto Supabase |
+| Renovación del JWT | **Automática** (`autoRefreshToken`, activo por defecto): el SDK chequea la sesión cada 10 s y refresca ~30 s antes del vencimiento; al reabrir la app recupera la sesión aunque el JWT haya vencido; reintenta ante fallas de red sin cerrar la sesión. | SDK `supabase_flutter` (sin código propio) |
+| Vida de la sesión | **Indefinida mientras la app se use**: los refresh tokens no vencen por tiempo, son de un solo uso y rotan en cada canje. | Automático (Supabase + SDK) |
+| Tope de sesión (opcional, por proyecto) | *Inactivity timeout* o *time-boxed sessions* (ej: "14 días sin uso → re-login"). Es configuración del proyecto, **no lógica de la app**. ⚠️ Requiere plan Pro o superior de Supabase (ver §13.2). | Configuración Supabase (Auth) |
+| Cambio de contexto activo | `refreshSession()`: reemite el JWT al instante con los claims del nuevo contexto. | App, al cambiar de contexto |
+
+Reglas y detalles:
+
+- **El JWT nunca se estira para alargar la sesión.** Un JWT no se puede revocar una vez emitido: estirarlo de 1 hora a 7 días multiplica por 168 la ventana de revocación (§9.2) y congela permisos viejos durante una semana. La sesión larga la dan los refresh tokens, que sí son revocables.
+- **El robo de refresh tokens está cubierto por la rotación.** Si un refresh token ya canjeado se vuelve a usar (señal de robo), Supabase considera comprometida la sesión y la termina **entera**, revocando todos sus tokens (*reuse detection*, con una ventana de gracia de 10 segundos para tolerar reintentos de red).
+- **No contamina la base.** Los tokens viven en el schema `auth`, administrado por Supabase. Cada renovación crea una fila nueva y conserva la anterior marcada como revocada (la necesita la *reuse detection*), pero la limpieza es automática: los tokens revocados se purgan ~24 h después y las sesiones vencidas, ~72 h después. En régimen, una sesión activa mantiene ~25 filas pequeñas — despreciable. (En self-hosted la limpieza viene desactivada: habilitar `GOTRUE_DB_CLEANUP_ENABLED=true`.)
+- **La librería de FlutterFlow queda retirada** para proyectos Flutter nativos: `DatetimeToRefreshToken`, `TokenRefreshWindowSeconds` y `SessionLifetimeSeconds` están cubiertos por el SDK (ventana de refresh integrada, persistencia y recuperación de sesión al reabrir la app) y por la configuración de Supabase (topes de sesión).
+
+> 💡 **Ejemplo práctico — el cliente que pide "sesión de 14 días"**
+> Un cliente quiere que sus usuarios no tengan que loguearse de nuevo durante 14 días. No se toca el JWT (sigue en 1 hora): se configura el *inactivity timeout* del proyecto en 14 días. El empleado que abre la app todos los días **no se desloguea nunca** — cada uso renueva la sesión. El que no la abre en 14 días vuelve a iniciar sesión. Y la ventana de revocación sigue siendo de 1 hora: si lo desvinculan, sus permisos mueren dentro de la hora, no a los 14 días.
 
 ---
 
@@ -621,10 +659,10 @@ flowchart LR
 - El RLS cubre los cuatro verbos: lectura (qué filas veo), inserción (no puedo insertar filas de otra empresa — cláusula de verificación), actualización y borrado.
 - Los **permisos** también se evalúan en la base cuando corresponde: por ejemplo, insertar en `PRODUCTS` exige el permiso `products.create` en el contexto activo, no solo pertenecer a la empresa. Habrá funciones auxiliares estándar (`fn_has_permission`, etc.) reutilizables en todos los proyectos.
 - **Alcance empresa vs. sucursal según la tabla:** hay tablas donde todos los miembros de la empresa ven lo mismo (ej: catálogo de productos) y tablas donde solo se ve lo de la propia sucursal (ej: cajas, stock). Cada sistema define el alcance de cada tabla; el estándar provee ambos patrones de política.
-- **Trade-off conocido:** el token es una **foto** de los permisos, tomada al armar el contexto activo. Se gana velocidad (la base no consulta las tablas de roles en cada query) a cambio de inmediatez: un cambio de rol o de permisos no se refleja en los tokens ya emitidos hasta que expiran y se renuevan (minutos). Por eso los tokens son de **vida corta**, y las acciones críticas (desactivar un usuario, suspender una empresa) se complementan con verificación en base, que aplica al instante. Es la decisión estándar de la industria (Supabase, Auth0, Firebase): la alternativa — verificar todo en base en cada query — elimina esa ventana de minutos al costo del rendimiento de todo el sistema, todo el tiempo.
+- **Trade-off conocido:** el token es una **foto** de los permisos, tomada al armar el contexto activo. Se gana velocidad (la base no consulta las tablas de roles en cada query) a cambio de inmediatez: un cambio de rol o de permisos no se refleja en los tokens ya emitidos hasta que expiran y se renuevan (hasta 1 hora con el valor estándar, ver §8.1). Por eso los tokens son de **vida corta**, y las acciones críticas (desactivar un usuario, suspender una empresa) se complementan con verificación en base, que aplica al instante. Es la decisión estándar de la industria (Supabase, Auth0, Firebase): la alternativa — verificar todo en base en cada query — elimina esa ventana de minutos al costo del rendimiento de todo el sistema, todo el tiempo. La política completa de duración y renovación de tokens está en §8.1.
 
 > 💡 **Ejemplo práctico — el cajero desvinculado**
-> Despiden a un cajero a las 10:00 y el admin lo desactiva al instante. Su token vigente expira a las 10:05: durante esos minutos, su "credencial" todavía dice *Cajero de la sucursal Centro*. Para las operaciones comunes esa ventana es tolerable y se cierra sola. Para lo crítico no se espera: la baja del usuario también se verifica en base (RN-08: pierde acceso de inmediato), igual que la suspensión de una empresa (`COMPANIES.is_active = false` corta el acceso vía RLS al instante).
+> Despiden a un cajero a las 10:00 y el admin lo desactiva al instante. Su token vigente puede seguir siendo válido hasta las 11:00 (vida estándar de 1 hora, §8.1): durante esa ventana, su "credencial" todavía dice *Cajero de la sucursal Centro*. Para las operaciones comunes esa ventana es tolerable y se cierra sola. Para lo crítico no se espera: la baja del usuario también se verifica en base (RN-08: pierde acceso de inmediato), igual que la suspensión de una empresa (`COMPANIES.is_active = false` corta el acceso vía RLS al instante).
 
 ### 9.3 Tablas operativas y la columna de tenant: análisis de normalización
 
@@ -748,7 +786,7 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 | Invitación aceptada después de que el rol/sucursal fue eliminado | Asignación rota o acceso a algo inexistente | Validación al aceptar (RN-07): la invitación se invalida y se notifica para regenerarla. |
 | Todos los admins se van de la empresa | Empresa inaccesible para siempre | RN-03 (regla Owner-admin): el Owner siempre es admin y nadie puede quitarle el rol, así que siempre hay al menos un admin. |
 | Eliminar un rol en uso | Usuarios sin acceso de un día para el otro | RN-06: eliminación bloqueada hasta reasignar. |
-| Usuario desvinculado conserva token JWT vigente | Acceso residual por minutos | Trade-off conocido (§9.2): tokens de vida corta + verificación en base para acciones críticas. |
+| Usuario desvinculado conserva token JWT vigente | Acceso residual acotado (hasta 1 hora, §8.1) | Trade-off conocido (§9.2): tokens de vida corta + verificación en base para acciones críticas. |
 | Dos roles distintos del mismo usuario en la misma sucursal | Ambigüedad de permisos | Permitido, **sin combinar permisos**: el usuario opera con un rol a la vez; el contexto activo incluye el rol (§8, RN-15). |
 | Sistemas "chicos" que no usan sucursales | Tentación de simplificar el modelo y romper el estándar | Prohibido por principio 1: siempre existen `COMPANIES` y `BRANCHES`, aunque tengan una fila. La UI puede ocultar el concepto. |
 | Empresa suspendida (ej: falta de pago) | Usuarios siguen operando | `COMPANIES.is_active = false` corta el acceso vía RLS a todos sus miembros de inmediato, sin tocar sus asignaciones. |
@@ -766,7 +804,7 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 
 ### 13.1 Decisiones confirmadas
 
-Decisiones 1–8 validadas con Franco el 09/06/2026; decisiones 9 a 12, el 10/06/2026.
+Decisiones 1–8 validadas con Franco el 09/06/2026; decisiones 9 a 14, el 10/06/2026.
 
 1. **Permisos granulares** con catálogo por sistema; los roles agrupan permisos.
 2. **Contexto activo seleccionable**: una cuenta global, selector de asignaciones (empresa/sucursal/rol), cambio sin re-login.
@@ -780,6 +818,8 @@ Decisiones 1–8 validadas con Franco el 09/06/2026; decisiones 9 a 12, el 10/06
 10. **Columna de tenant en toda tabla operativa** (ratifica RN-11): desnormalización deliberada a favor de RLS directo, estándar uniforme y defensa en profundidad; la consistencia se garantiza declarativamente con FKs compuestas, tenant desde los claims y `WITH CHECK` (RN-16, análisis en §9.3).
 11. **Invitaciones rechazables, con confirmación previa**: el click del email lleva siempre a una pantalla con el detalle de la invitación; la persona decide aceptar o rechazar (estado terminal Rechazada, notifica al invitador). Aplica a los caminos B y C (§7.5).
 12. **La creación de empresas pasa siempre por la pantalla de registro**, también para usuarios existentes (inician sesión dentro del flujo y el *initial setup* omite la creación del usuario); nunca desde adentro de la app, donde la persona opera en el contexto de una empresa que puede no ser suya (§7.3).
+13. **Anti-enumeración estricta en el registro, con UI transparente**: se mantiene la respuesta pública idéntica y la resolución post-OTP (§7.3); la pantalla anticipa que el email se va a verificar y que, si ya hay cuenta, se ofrecerá iniciar sesión. Se descartó el aviso inmediato estilo "ya tenés cuenta" (Google/GitHub), que exige mitigaciones adicionales y revela información en rubros sensibles.
+14. **Política de sesiones estándar** (§8.1): JWT de 1 hora renovado automáticamente por el SDK; sesión larga por refresh tokens rotativos con *reuse detection*; tope de sesión opcional por proyecto vía configuración de Supabase — **nunca estirando el JWT**. La librería de tokens de FlutterFlow queda retirada para Flutter nativo.
 
 ### 13.2 Preguntas abiertas (a definir antes de la v2)
 
@@ -787,6 +827,8 @@ Decisiones 1–8 validadas con Franco el 09/06/2026; decisiones 9 a 12, el 10/06
 2. **Permisos a nivel empresa vs. sucursal en `SYSTEM_SETTINGS`:** ¿algunos parámetros podrán tener override por empresa (ej: comisión especial negociada con un cliente grande)? Propuesta: contemplar un alcance opcional por empresa en la v2.
 3. **Auditoría formal:** ¿incluimos en el estándar una tabla de log de eventos sensibles (cambios de roles, invitaciones, transferencias de ownership)? Propuesta: sí, como entidad estándar en la v2.
 4. **Invitaciones masivas:** ¿se necesita invitar por lote (CSV / múltiples emails)? Puede diseñarse después sin tocar el modelo.
+5. **Rate limiting y anti-automatización** (planteada el 10/06/2026): definir el estándar de límites de intentos y protección contra bots para los endpoints públicos (OTP de registro, login, invitaciones): límites por IP y por identificador, cuándo exigir CAPTCHA. Pendiente de análisis.
+6. **Tope de sesión en proyectos con plan Free de Supabase** (planteada el 10/06/2026): el *inactivity timeout* y las *time-boxed sessions* (§8.1) requieren plan Pro. Definir si el tope de sesión server-side es requisito del estándar (→ plan Pro mínimo para producción) o si en Free se acepta sesión sin tope mientras se use.
 
 ---
 
@@ -819,6 +861,7 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 | 1.3.0 | 10/06/2026 | Resolución de la pregunta abierta sobre tablas operativas: definición formal en el glosario y nueva §9.3 con el análisis de normalización de la columna de tenant (pros/contras de la desnormalización deliberada); nueva RN-16 (FKs compuestas, tenant desde los claims, `WITH CHECK`); caso borde de mezcla de tenants; decisión confirmada 10. |
 | 1.4.0 | 10/06/2026 | Ejemplo de multi-rol reemplazado por uno real (clínica: separación de funciones y auditoría); el camino A aclara que el registrante queda como Owner; resolución del email post-OTP en el registro (cuenta existente → login dentro del flujo, invitación pendiente → ofrece aceptarla, email nuevo → flujo normal) sin exponer enumeración de cuentas; la creación de empresas —también para usuarios existentes— pasa siempre por la pantalla de registro, nunca desde adentro de la app; invitaciones rechazables con pantalla de confirmación previa (nuevo estado Rechazada, RN-07 ampliada); el ciclo de vida de la invitación se adelanta a §7.5; nuevos casos borde y decisiones 11 y 12. |
 | 1.4.1 | 10/06/2026 | Aclaraciones conceptuales para lectores no técnicos, sin cambios de modelo ni de reglas: qué significa "respuesta pública idéntica" y qué es la enumeración de cuentas (§7.3 + glosario, con ejemplo del atacante); qué son el JWT y sus claims (§8 + glosario, con la analogía de la credencial de evento); y explicación completa del trade-off del token en §9.2 (qué se gana, qué se cede, ejemplo del cajero desvinculado). |
+| 1.5.0 | 10/06/2026 | Explicación de cómo funciona la firma del JWT (§8, analogía del cheque); requisito de UI de transparencia en el registro y justificación del criterio anti-enumeración estricto frente al aviso inmediato de la industria (§7.3, decisión 13); nueva §8.1 "Política de sesiones y renovación de tokens" tras investigación de mercado: JWT de 1 hora renovado automáticamente por el SDK, sesión larga por refresh tokens rotativos con *reuse detection*, tope opcional por inactividad/time-box (plan Pro), limpieza automática del schema `auth` y retiro de la librería de FlutterFlow (decisión 14); glosario: refresh token; preguntas abiertas nuevas: rate limiting y tope de sesión en plan Free. |
 
 ---
 
@@ -830,9 +873,9 @@ Una fila por aprobador de la versión en circulación (los borradores superados 
 
 | Versión | Rol | Nombre | Fecha | Estado |
 |---|---|---|---|---|
-| 1.4.1 | CEO | Franco Cruz | — | Pendiente |
-| 1.4.1 | CTO | — | — | Pendiente |
-| 1.4.1 | Líder técnico | — | — | Pendiente |
+| 1.5.0 | CEO | Franco Cruz | — | Pendiente |
+| 1.5.0 | CTO | — | — | Pendiente |
+| 1.5.0 | Líder técnico | — | — | Pendiente |
 
 ### 17.2 Auditorías y revisiones
 
@@ -844,4 +887,5 @@ Registro de cada revisión del documento, haya derivado o no en un cambio de ver
 | 10/06/2026 | Franco Cruz | Documento completo (v1.1.0) | Cambios solicitados | 8 puntos de revisión que originaron la v1.2.0. El análisis de tablas operativas/normalización quedó pendiente. |
 | 10/06/2026 | Franco Cruz | Tablas operativas y desnormalización del tenant (v1.2.0) | Decisión adoptada | Se ratifica RN-11 (columna de tenant en toda tabla operativa) con prevención declarativa de inconsistencias (nueva RN-16). Origen de la v1.3.0. |
 | 10/06/2026 | Franco Cruz | Flujos de incorporación y multi-rol (v1.3.0) | Cambios solicitados | 5 puntos de mejora que originaron la v1.4.0: ejemplo de multi-rol, Owner en el camino A, resolución del email en el registro, invitaciones rechazables y reubicación del ciclo de vida. |
-| 10/06/2026 | Franco Cruz (CEO) | Claridad conceptual (v1.4.0) | Cambios solicitados | Tres conceptos a aclarar para lectores no técnicos: respuesta pública idéntica / enumeración de cuentas, claims del JWT y trade-off del token. Origen de la v1.4.1. |
+| 10/06/2026 | Franco Cruz | Claridad conceptual (v1.4.0) | Cambios solicitados | Tres conceptos a aclarar para lectores no técnicos: respuesta pública idéntica / enumeración de cuentas, claims del JWT y trade-off del token. Origen de la v1.4.1. |
+| 10/06/2026 | Franco Cruz | Sesiones, tokens y anti-enumeración (v1.4.1) | Decisiones adoptadas | Con investigación de mercado (OWASP, productos líderes, docs y código de Supabase/SDK Flutter): se mantiene la anti-enumeración estricta con UI transparente (decisión 13) y se define la política de sesiones estándar (decisión 14). Rate limiting y tope de sesión en plan Free quedan como preguntas abiertas. Origen de la v1.5.0. |
