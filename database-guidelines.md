@@ -1,6 +1,6 @@
 # Estandarización de Roles y Permisos — Eurekant LLC
 
-> **Versión:** 1.3.0 (conceptual — sin SQL)
+> **Versión:** 1.4.0 (conceptual — sin SQL)
 > **Fecha:** 10/06/2026
 > **Estado:** Borrador para validación interna
 > **Alcance:** Todos los proyectos de software desarrollados por Eurekant
@@ -25,9 +25,9 @@
    - [7.2 Bloque común: verificación de email por OTP](#72-bloque-común-verificación-de-email-por-otp)
    - [7.3 Camino A — Registro por cuenta propia e *initial setup*](#73-camino-a--registro-por-cuenta-propia-e-initial-setup)
    - [7.4 Caminos B y C — Invitación: creación y envío](#74-caminos-b-y-c--invitación-creación-y-envío)
-   - [7.5 Camino B — Registro por invitación (usuario nuevo)](#75-camino-b--registro-por-invitación-usuario-nuevo)
-   - [7.6 Camino C — Aceptación directa (usuario existente)](#76-camino-c--aceptación-directa-usuario-existente)
-   - [7.7 Ciclo de vida de una invitación](#77-ciclo-de-vida-de-una-invitación)
+   - [7.5 Ciclo de vida de una invitación](#75-ciclo-de-vida-de-una-invitación)
+   - [7.6 Camino B — Registro por invitación (usuario nuevo)](#76-camino-b--registro-por-invitación-usuario-nuevo)
+   - [7.7 Camino C — Aceptación o rechazo (usuario existente)](#77-camino-c--aceptación-o-rechazo-usuario-existente)
 8. [Contexto activo: en qué empresa, sucursal y rol estoy parado](#8-contexto-activo-en-qué-empresa-sucursal-y-rol-estoy-parado)
 9. [RLS: aislamiento de datos sin filtros en el código](#9-rls-aislamiento-de-datos-sin-filtros-en-el-código)
    - [9.1 El principio](#91-el-principio)
@@ -224,7 +224,9 @@ erDiagram
     PERMISSIONS ||--o{ ROLE_PERMISSIONS : "compone"
     ROLES ||--o{ INVITATIONS : "propone"
     BRANCHES ||--o{ INVITATIONS : "destina"
+    USER_ROLES ||--o{ INVITATIONS : "invita"
     USERS ||--o| SUPERADMINS : "puede ser"
+    SUPERADMINS ||--o{ SYSTEM_SETTINGS : "actualiza"
 
     USERS {
         uuid user_id PK
@@ -285,10 +287,10 @@ erDiagram
         uuid branch_id FK
         uuid role_id FK
         citext invitation_email
-        citext first_name "precargado por quien invita"
-        citext last_name "precargado por quien invita"
+        citext first_name "precargado en camino B - nullable"
+        citext last_name "precargado en camino B - nullable"
         uuid invited_by FK "USER_ROLES de quien invita"
-        varchar invitation_status "pending-accepted-expired-revoked"
+        varchar invitation_status "pending-accepted-rejected-expired-revoked"
         timestamptz expires_at
         timestamptz created_at
     }
@@ -354,14 +356,16 @@ flowchart TD
     B0 --> OTPB["📧 Verificación de email<br/>por OTP (§7.2)"]
     OTPA --> CTAA["Creación de cuenta:<br/>datos personales + contraseña"]
     OTPB --> CTAB["Creación de cuenta:<br/>datos precargados + contraseña"]
-    CTAA --> SETUP["⚙️ initial setup (§7.3):<br/>crea empresa, sucursal,<br/>rol admin y asignación"]
+    CTAA --> SETUP["⚙️ initial setup (§7.3):<br/>crea empresa (la persona queda<br/>como Owner), sucursal,<br/>rol admin y asignación"]
     CTAB --> URB["Se crea USER_ROLES con el rol<br/>y sucursal de la invitación"]
-    C0 --> ACC["Acepta la invitación<br/>(login si hace falta)"]
+    C0 --> ACC["Revisa la invitación y la acepta<br/>(o la rechaza, §7.5)"]
     ACC --> URC["Se crea USER_ROLES con el rol<br/>y sucursal de la invitación"]
     SETUP --> FIN["✅ Dentro del sistema<br/>con su contexto activo (§8)"]
     URB --> FIN
     URC --> FIN
 ```
+
+El diagrama muestra el **happy path** de cada flujo. Las variantes — cuenta ya existente o invitación pendiente en el camino A (§7.3), rechazo de la invitación en los caminos B y C (§7.5) — se detallan en cada subsección; y la creación efectiva de la cuenta del camino A ocurre dentro de la transacción del *initial setup* (paso 1, §7.3).
 
 Qué bloques usa cada camino:
 
@@ -369,9 +373,9 @@ Qué bloques usa cada camino:
 |---|---|---|---|
 | Invitación previa (§7.4) | — | ✔ | ✔ |
 | Verificación de email por OTP (§7.2) | ✔ | ✔ | — (ya verificó su email al crear su cuenta) |
-| Creación de cuenta (datos + contraseña) | ✔ | ✔ (datos precargados por el invitador) | — |
+| Creación de cuenta (datos + contraseña) | ✔ (se omite si ya tenía cuenta, §7.3) | ✔ (datos precargados por el invitador) | — |
 | *Initial setup* (§7.3) | ✔ | — | — |
-| Creación de asignación (`USER_ROLES`) | ✔ (rol `admin`) | ✔ (rol de la invitación) | ✔ (rol de la invitación) |
+| Creación de asignación (`USER_ROLES`) | ✔ (rol `admin`, y la persona queda como **Owner** de la empresa) | ✔ (rol de la invitación) | ✔ (rol de la invitación) |
 
 La clave para entender los tres caminos: **el camino A es el único que crea una empresa**; B y C entran a una existente. Y el camino B es, en esencia, "el camino A sin *initial setup* y con los datos precargados por quien invitó".
 
@@ -390,7 +394,7 @@ Reglas del bloque:
 
 - El código tiene **vencimiento corto** y puede reenviarse (cada reenvío invalida el anterior).
 - Los **intentos son limitados** (protección contra fuerza bruta y contra enumeración de cuentas).
-- Es **exactamente el mismo bloque** en los caminos A y B; en el camino B se agrega una validación extra: el email verificado debe **coincidir con el email de la invitación** (ver §7.5).
+- Es **exactamente el mismo bloque** en los caminos A y B; en el camino B se agrega una validación extra: el email verificado debe **coincidir con el email de la invitación** (ver §7.6).
 - El camino C no lo necesita: ese usuario ya verificó su email cuando creó su cuenta.
 
 ### 7.3 Camino A — Registro por cuenta propia e *initial setup*
@@ -403,10 +407,16 @@ flowchart TD
     B --> C["📧 Verificación por OTP (§7.2):<br/>código de 6 dígitos al email"]
     C --> D{"¿OTP válido?"}
     D -- No --> C2["Reintentar / reenviar código"] --> C
-    D -- Sí --> E["Completa datos personales:<br/>nombre, apellido, contraseña"]
-    E --> F["Completa datos de la empresa:<br/>nombre y datos según el sistema"]
+    D -- Sí --> V{"Resolución del email<br/>(recién acá, con la<br/>casilla ya verificada)"}
+    V -- "Tiene invitación<br/>pendiente" --> W["Ofrece aceptar la invitación<br/>(camino B §7.6 o C §7.7)<br/>o continuar creando su empresa<br/>(la invitación sigue pendiente)"]
+    W -- "Continúa acá" --> X{"¿El email ya<br/>tiene cuenta?"}
+    V -- "Sin invitación<br/>pendiente" --> X
+    X -- "Sí" --> L["Inicia sesión con su contraseña<br/>(sus datos personales ya existen)"]
+    X -- "No" --> E["Completa datos personales:<br/>nombre, apellido, contraseña"]
+    L --> F["Completa datos de la empresa:<br/>nombre y datos según el sistema"]
+    E --> F
     F --> G["⚙️ initial setup (transacción única en BD)"]
-    G --> G1["1. Crea USERS<br/>(la cuenta de la persona)"]
+    G --> G1["1. Crea USERS — se omite<br/>si la cuenta ya existía"]
     G1 --> G2["2. Crea COMPANIES<br/>con owner_id → ese usuario"]
     G2 --> G3["3. Crea BRANCHES 'Principal'"]
     G3 --> G4["4. Crea rol admin<br/>(is_default = true)"]
@@ -422,6 +432,12 @@ Características del *initial setup*:
 - Su **núcleo es estándar** en todos los proyectos (pasos 1–5: usuario, empresa, sucursal, admin, asignación). Su **cola es específica** de cada sistema (paso 6): cada software agrega ahí su carga inicial (categorías de ejemplo, configuración por defecto, datos de demo, roles plantilla).
 - La verificación del email por OTP (§7.2) es **obligatoria también en el registro propio**, no solo en el flujo de invitación.
 
+Resolución del email después del OTP:
+
+- **El OTP se envía siempre y la respuesta pública es idéntica**, exista o no la cuenta. La existencia de una cuenta o de una invitación pendiente se revela **únicamente después de validar el OTP**, es decir, solo a quien ya demostró ser dueño de la casilla. Así la pantalla de registro no sirve para enumerar cuentas (mismo criterio que en §7.4; ver §12).
+- **Usuario existente que crea otra empresa.** Si el email ya tiene cuenta, la persona inicia sesión con su contraseña dentro del mismo flujo y pasa directo a los datos de la empresa: el *initial setup* omite el paso 1 y la empresa nueva queda con su usuario existente como Owner (un usuario puede ser owner de N empresas). Esto ocurre **siempre desde la pantalla de registro, nunca desde adentro de la app**: dentro del software la persona opera en el contexto de una empresa —que puede ser ajena—, y un botón "crear mi propia empresa" ahí sería confuso (ej: un contador externo trabajando en el sistema de su cliente no debería ver esa opción).
+- **Invitación pendiente detectada.** Se ofrece aceptarla en ese momento (sigue por el camino B o C, según tenga cuenta o no) o continuar con el registro propio; en ese caso la invitación queda pendiente y puede aceptarse más adelante. Si la acepta en ese momento, el bloque OTP **no se repite**: la casilla ya quedó verificada en este mismo flujo. No son opciones excluyentes: la persona puede terminar siendo Owner de su empresa **y** miembro de la empresa que la invitó.
+
 > 💡 **Ejemplo práctico — initial setup específico por sistema**
 > En el sistema de turnos para clínicas, el *initial setup* además crea: los roles plantilla "Recepcionista" y "Profesional", una agenda de ejemplo y los horarios de atención por defecto. En el sistema de stock, crea: el rol plantilla "Depósito", una categoría "General" y un producto de ejemplo. El núcleo (empresa, sucursal, admin) es idéntico en ambos.
 
@@ -434,22 +450,51 @@ flowchart TD
     A["Usuario con permiso users.invite<br/>ingresa el email de la persona"] --> B{"¿El email ya tiene<br/>cuenta en el sistema?"}
     B -- "Sí → Camino C<br/>(usuario existente)" --> C["Selecciona sucursal y rol<br/>(no se piden datos personales:<br/>ya existen en su cuenta)"]
     C --> D["Se crea INVITATIONS"]
-    D --> HC["📧 Email con botón 'Aceptar invitación':<br/>quién invita, a qué empresa,<br/>a qué sucursal y con qué rol"]
-    HC --> JC["Aceptación directa (§7.6)"]
+    D --> HC["📧 Email con botón 'Ver invitación':<br/>quién invita, a qué empresa,<br/>a qué sucursal y con qué rol"]
+    HC --> JC["Aceptación o rechazo (§7.7)"]
     B -- "No → Camino B<br/>(usuario nuevo)" --> E["Formulario: datos mínimos<br/>(nombre, apellido y esenciales)"]
     E --> F["Selecciona sucursal y rol"]
     F --> G["Se crea INVITATIONS<br/>con datos precargados"]
-    G --> HB["📧 Email con botón 'Registrarme':<br/>quién invita, a qué empresa,<br/>a qué sucursal y con qué rol"]
-    HB --> JB["Registro por invitación (§7.5)"]
+    G --> HB["📧 Email con botón 'Ver invitación':<br/>quién invita, a qué empresa,<br/>a qué sucursal y con qué rol"]
+    HB --> JB["Registro por invitación (§7.6)"]
 ```
 
 Notas:
 
-- En ambos escenarios el resultado intermedio es el mismo: una fila en `INVITATIONS` con empresa, sucursal, rol, email y quién invita. Lo que cambia es lo que pasa cuando la persona abre el email: registro completo (camino B) o aceptación directa (camino C).
+- En ambos escenarios el resultado intermedio es el mismo: una fila en `INVITATIONS` con empresa, sucursal, rol, email y quién invita. Lo que cambia es lo que pasa después de la pantalla de confirmación: en el camino B la persona se registra (o rechaza); en el camino C acepta (o rechaza). En **ningún caso** la invitación se acepta automáticamente: la persona siempre ve el detalle y decide (§7.5).
 - La **verificación de existencia** del email debe hacerse de forma segura: el sistema responde internamente si existe o no para ajustar el formulario, pero **no debe exponer** a cualquier usuario una API que permita enumerar qué emails tienen cuenta (punto de fuga clásico, ver §12).
 - Para el usuario existente **no se piden datos personales** porque ya existen en su cuenta; solo se elige sucursal y rol.
 
-### 7.5 Camino B — Registro por invitación (usuario nuevo)
+### 7.5 Ciclo de vida de una invitación
+
+Antes de ver los dos desenlaces (caminos B y C), los estados por los que puede pasar una invitación:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pendiente : se crea y envía
+    Pendiente --> Aceptada : la persona la acepta (camino B o C)
+    Pendiente --> Rechazada : la persona la rechaza
+    Pendiente --> Revocada : el invitador la cancela
+    Pendiente --> Expirada : pasan 7 días
+    Expirada --> Pendiente : reenviar (nueva expiración)
+    Aceptada --> [*]
+    Rechazada --> [*]
+    Revocada --> [*]
+```
+
+Reglas:
+
+- **Expiración:** 7 días (valor parametrizable desde `SYSTEM_SETTINGS`). Una invitación expirada puede reenviarse, lo que renueva la fecha.
+- **Revocación:** quien tenga `users.invite` puede revocar una invitación pendiente (ej: se equivocó de email o la persona ya no se incorpora). Una invitación revocada o aceptada no puede reutilizarse.
+- **Rechazo:** la persona invitada puede **rechazar** la invitación desde la pantalla de confirmación, en ambos caminos (B y C); el invitador recibe la notificación. El rechazo es terminal y la invitación no puede reutilizarse: si fue un error o la persona cambia de opinión, se crea una nueva.
+- **Unicidad:** solo puede existir **una invitación pendiente por email + empresa**. Si se quiere cambiar el rol o la sucursal antes de que la acepte, se revoca y se crea una nueva.
+- **Validaciones al crear:** no se puede invitar a un email que ya tiene asignación activa en esa misma sucursal con ese mismo rol; y el rol y la sucursal de la invitación deben pertenecer a la empresa del invitador.
+- **Validaciones al aceptar:** si entre el envío y la aceptación el rol o la sucursal fueron desactivados, la invitación se considera inválida y se informa a la persona (y al invitador) para que se genere una nueva.
+
+> 💡 **Ejemplo práctico — invitación con typo**
+> El admin invita a `jaun@gmail.com` en lugar de `juan@gmail.com`. Se da cuenta al día siguiente: revoca la invitación pendiente y crea una nueva con el email correcto. Si el dueño real de `jaun@gmail.com` intentara usar el link viejo, vería "invitación revocada" y no podría acceder a nada.
+
+### 7.6 Camino B — Registro por invitación (usuario nuevo)
 
 ```mermaid
 sequenceDiagram
@@ -458,19 +503,27 @@ sequenceDiagram
     actor N as Persona invitada
     I->>S: Ingresa email + nombre/apellido + rol + sucursal
     S->>S: Crea INVITATIONS (status: pending, expira en 7 días)
-    S->>N: 📧 Email: "Carlos te invita a Pizzería Don Carlo,<br/>sucursal Centro, como Cajero" + botón Registrarme
-    N->>S: Click en "Registrarme"
-    S->>N: Pide el email al que fue invitado
-    N->>S: Ingresa el email y toca "Validar correo"
-    S->>N: 📧 OTP: código de 6 dígitos (§7.2)
-    N->>S: Ingresa el código
-    S->>S: ✅ Email verificado y coincide con la invitación
-    S->>N: Muestra datos precargados (nombre, apellido)
-    N->>S: Confirma o corrige sus datos
-    N->>S: Crea su contraseña
-    S->>S: Crea USERS + USER_ROLES (usuario + rol + sucursal)
-    S->>S: INVITATIONS → status: accepted
-    S->>N: ✅ Cuenta creada, acceso a la sucursal con el rol asignado
+    S->>N: 📧 Email: "Carlos te invita a Pizzería Don Carlo,<br/>sucursal Centro, como Cajero" + botón Ver invitación
+    N->>S: Click en "Ver invitación"
+    S->>N: Pantalla de confirmación: detalle de la invitación
+    alt Rechaza
+        N->>S: Rechaza la invitación
+        S->>S: INVITATIONS → status: rejected
+        S->>I: 📧 Notificación del rechazo (§7.5)
+    else Acepta y se registra
+        N->>S: Toca "Registrarme"
+        S->>N: Pide el email al que fue invitado
+        N->>S: Ingresa el email y toca "Validar correo"
+        S->>N: 📧 OTP: código de 6 dígitos (§7.2)
+        N->>S: Ingresa el código
+        S->>S: ✅ Email verificado y coincide con la invitación
+        S->>N: Muestra datos precargados (nombre, apellido)
+        N->>S: Confirma o corrige sus datos
+        N->>S: Crea su contraseña
+        S->>S: Crea USERS + USER_ROLES (usuario + rol + sucursal)
+        S->>S: INVITATIONS → status: accepted
+        S->>N: ✅ Cuenta creada, acceso a la sucursal con el rol asignado
+    end
 ```
 
 Detalles importantes:
@@ -478,44 +531,26 @@ Detalles importantes:
 - El registro por invitación es **el mismo flujo** que el registro por cuenta propia (camino A), con tres diferencias: (a) llega por email en vez de iniciarse solo, (b) los datos personales vienen **precargados** por quien invitó y la persona puede corregirlos, y (c) **no se ejecuta el initial setup** ni se piden datos de empresa — la persona entra a una empresa existente, no crea una.
 - El email que la persona verifica con el OTP **debe coincidir** con el email de la invitación. Si no coincide, no se vincula la invitación.
 - La persona invitada es la dueña final de sus datos: lo que el invitador escribió (nombre, apellido) es solo una sugerencia editable.
+- La pantalla a la que lleva el email muestra el detalle de la invitación y también permite **rechazarla** sin registrarse (estado Rechazada, §7.5); el registro continúa solo si la persona acepta.
+- Si el email **ya tiene cuenta** al momento de abrir la invitación (la persona se registró por cuenta propia entre el envío y el click), el sistema lo detecta y el flujo se convierte en el camino C: login y aceptación, sin nuevo registro (§7.7).
 
-### 7.6 Camino C — Aceptación directa (usuario existente)
+### 7.7 Camino C — Aceptación o rechazo (usuario existente)
 
 ```mermaid
 flowchart LR
-    A["📧 Click en<br/>'Aceptar invitación'"] --> B["Login<br/>(si no tiene sesión activa)"]
-    B --> C["Validaciones: invitación vigente,<br/>rol y sucursal activos (RN-07)"]
-    C --> D["Se crea USER_ROLES:<br/>usuario + rol + sucursal"]
-    D --> E["✅ Acceso inmediato: la empresa aparece<br/>en su selector de contexto (§8)"]
+    A["📧 Click en<br/>'Ver invitación'"] --> B["Login<br/>(si no tiene sesión activa)"]
+    B --> C["Pantalla de confirmación:<br/>quién invita, a qué empresa,<br/>a qué sucursal y con qué rol"]
+    C --> D{"¿Qué decide?"}
+    D -- "Acepta" --> E["Validaciones: invitación vigente,<br/>rol y sucursal activos (RN-07)"]
+    E --> F["Se crea USER_ROLES:<br/>usuario + rol + sucursal"]
+    F --> G["✅ Acceso inmediato: la empresa aparece<br/>en su selector de contexto (§8)"]
+    D -- "Rechaza" --> H["INVITATIONS → rejected;<br/>se notifica al invitador (§7.5)"]
 ```
 
-- No hay OTP ni formulario de datos: la persona ya verificó su email al crear su cuenta y sus datos personales ya existen. Solo acepta (con login de por medio si no tenía sesión abierta).
-- Antes de crear la asignación, el sistema valida que la invitación siga vigente y que el rol y la sucursal sigan activos (RN-07). Si algo fue desactivado en el medio, la invitación se invalida y se notifica a ambas partes.
-- Al aceptar, la nueva empresa/sucursal aparece de inmediato en el selector de contexto del usuario (§8), sin necesidad de cerrar sesión.
-
-### 7.7 Ciclo de vida de una invitación
-
-```mermaid
-stateDiagram-v2
-    [*] --> Pendiente : se crea y envía
-    Pendiente --> Aceptada : la persona completa el flujo
-    Pendiente --> Revocada : el invitador la cancela
-    Pendiente --> Expirada : pasan 7 días
-    Expirada --> Pendiente : reenviar (nueva expiración)
-    Aceptada --> [*]
-    Revocada --> [*]
-```
-
-Reglas:
-
-- **Expiración:** 7 días (valor parametrizable desde `SYSTEM_SETTINGS`). Una invitación expirada puede reenviarse, lo que renueva la fecha.
-- **Revocación:** quien tenga `users.invite` puede revocar una invitación pendiente (ej: se equivocó de email o la persona ya no se incorpora). Una invitación revocada o aceptada no puede reutilizarse.
-- **Unicidad:** solo puede existir **una invitación pendiente por email + empresa**. Si se quiere cambiar el rol o la sucursal antes de que la acepte, se revoca y se crea una nueva.
-- **Validaciones al crear:** no se puede invitar a un email que ya tiene asignación activa en esa misma sucursal con ese mismo rol; y el rol y la sucursal de la invitación deben pertenecer a la empresa del invitador.
-- **Validaciones al aceptar:** si entre el envío y la aceptación el rol o la sucursal fueron desactivados, la invitación se considera inválida y se informa a la persona (y al invitador) para que se genere una nueva.
-
-> 💡 **Ejemplo práctico — invitación con typo**
-> El admin invita a `jaun@gmail.com` en lugar de `juan@gmail.com`. Se da cuenta al día siguiente: revoca la invitación pendiente y crea una nueva con el email correcto. Si el dueño real de `jaun@gmail.com` intentara usar el link viejo, vería "invitación revocada" y no podría acceder a nada.
+- **Nada se acepta automáticamente:** el click del email no crea ninguna asignación — lleva a una pantalla de confirmación con el detalle completo de la invitación, y ahí la persona decide aceptar o rechazar.
+- No hay OTP ni formulario de datos: la persona ya verificó su email al crear su cuenta y sus datos personales ya existen. Solo necesita login si no tenía sesión abierta.
+- **Si acepta:** el sistema valida que la invitación siga vigente y que el rol y la sucursal sigan activos (RN-07); se crea la asignación `USER_ROLES` y la nueva empresa/sucursal aparece de inmediato en su selector de contexto (§8), sin cerrar sesión. Si algo fue desactivado en el medio, la invitación se invalida y se notifica a ambas partes.
+- **Si rechaza:** la invitación pasa a estado Rechazada y se notifica al invitador (§7.5). Si fue un error, el invitador crea una nueva.
 
 ---
 
@@ -544,7 +579,7 @@ Reglas:
 - El sistema recuerda el último contexto usado para preseleccionarlo en el próximo login.
 
 > 💡 **Ejemplo práctico — multi-rol sin combinación de permisos**
-> En la sucursal Centro, Laura es *Cajera* y también *Responsable de caja fuerte*. Operando como Cajera **no puede** abrir la caja fuerte, aunque "tenga" el otro rol: para eso cambia su contexto al rol Responsable. Esto mantiene la coherencia con la auditoría (RN-14): como `created_by` apunta a la asignación (`USER_ROLES`), cada acción queda registrada sin ambigüedad con el rol exacto con el que se hizo.
+> En el sistema de turnos de la clínica, la Dra. Paredes tiene dos roles en la misma sucursal: **Profesional** (atiende turnos y carga evoluciones en las historias clínicas de sus pacientes) y **Directora médica** (ve reportes, aprueba reintegros y accede a historias clínicas de otros profesionales). Atendiendo pacientes opera como Profesional: no ve reportes ni historias ajenas, aunque "tenga" el otro rol. Para la revisión mensual cambia su contexto a Directora médica. La ventaja es doble: **separación de funciones** — sus tareas cotidianas no cargan privilegios elevados, el mismo principio por el que un administrador de sistemas no usa root para el día a día — y **auditoría inequívoca** (RN-14): si aprueba un reintegro o corrige una historia clínica ajena, el registro (`created_by`/`updated_by` → `USER_ROLES`) muestra que lo hizo actuando como Directora médica, no como Profesional.
 
 ---
 
@@ -679,7 +714,7 @@ Estas reglas son **obligatorias** en todos los proyectos. En la v2, cada una se 
 | RN-04 | En `USER_ROLES`, la sucursal y el rol deben pertenecer a la **misma empresa**. |
 | RN-05 | La combinación `usuario + rol + sucursal` es única (no se duplica una asignación). |
 | RN-06 | No se puede eliminar un rol con asignaciones activas; primero se reasignan los usuarios. Toda eliminación es soft delete. |
-| RN-07 | Una invitación pendiente es única por `email + empresa`; expira (parametrizable, default 7 días); es revocable; y al aceptarse valida que el rol y la sucursal sigan activos. |
+| RN-07 | Una invitación pendiente es única por `email + empresa`; expira (parametrizable, default 7 días); es revocable por el invitador y **rechazable por la persona invitada** (siempre media una pantalla de confirmación, nunca se acepta automáticamente); y al aceptarse valida que el rol y la sucursal sigan activos. |
 | RN-08 | La baja de un usuario de una empresa es soft delete: pierde acceso de inmediato, el historial queda intacto y puede reactivarse. |
 | RN-09 | El email de un usuario es único y case-insensitive a nivel global del sistema. |
 | RN-10 | Los nombres de rol y de sucursal son únicos **dentro de su empresa** (case-insensitive). |
@@ -706,11 +741,13 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 | Dos roles distintos del mismo usuario en la misma sucursal | Ambigüedad de permisos | Permitido, **sin combinar permisos**: el usuario opera con un rol a la vez; el contexto activo incluye el rol (§8, RN-15). |
 | Sistemas "chicos" que no usan sucursales | Tentación de simplificar el modelo y romper el estándar | Prohibido por principio 1: siempre existen `COMPANIES` y `BRANCHES`, aunque tengan una fila. La UI puede ocultar el concepto. |
 | Empresa suspendida (ej: falta de pago) | Usuarios siguen operando | `COMPANIES.is_active = false` corta el acceso vía RLS a todos sus miembros de inmediato, sin tocar sus asignaciones. |
-| Invitador escribe mal los datos del invitado | Datos incorrectos permanentes | La persona invitada revisa y corrige sus datos al registrarse (§7.5). |
+| Invitador escribe mal los datos del invitado | Datos incorrectos permanentes | La persona invitada revisa y corrige sus datos al registrarse (§7.6). |
 | Sucursal desactivada con usuarios asignados | Asignaciones colgando de algo inactivo | Las asignaciones de esa sucursal quedan inactivas en cascada lógica; si un usuario queda sin ninguna asignación activa, no puede ingresar a esa empresa. |
 | Borrado físico de usuarios | Historial y auditoría rotos | RN-08 y RN-14: soft delete + auditoría sobre `USER_ROLES`. |
 | Mismo nombre de rol en empresas distintas | Colisión de nombres | No hay colisión: la unicidad es por empresa (RN-10). |
 | Fila operativa que referencia datos de otra empresa (mezcla de tenants por bug) | Inconsistencia de datos y fuga entre tenants | RN-16: FKs compuestas + tenant desde los claims + `WITH CHECK` hacen el INSERT/UPDATE inconsistente estructuralmente imposible (§9.3). |
+| Pantalla de registro usada para descubrir si un email tiene cuenta | Enumeración de cuentas desde el registro | El OTP se envía siempre y la respuesta pública es idéntica en todos los casos; la existencia de cuenta o invitación pendiente solo se revela tras validar el OTP (§7.3). |
+| Persona invitada como usuario nuevo se registra por cuenta propia antes de aceptar | El registro por invitación operaría sobre una cuenta que ya existe | Al abrir la invitación, el sistema detecta la cuenta y convierte el flujo en el camino C: login y aceptación (§7.7). |
 
 ---
 
@@ -718,7 +755,7 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 
 ### 13.1 Decisiones confirmadas
 
-Decisiones 1–8 validadas con Franco el 09/06/2026; decisiones 9 y 10, el 10/06/2026.
+Decisiones 1–8 validadas con Franco el 09/06/2026; decisiones 9 a 12, el 10/06/2026.
 
 1. **Permisos granulares** con catálogo por sistema; los roles agrupan permisos.
 2. **Contexto activo seleccionable**: una cuenta global, selector de asignaciones (empresa/sucursal/rol), cambio sin re-login.
@@ -730,6 +767,8 @@ Decisiones 1–8 validadas con Franco el 09/06/2026; decisiones 9 y 10, el 10/06
 8. **Baja de usuarios por desactivación** (soft delete) con historial intacto.
 9. **Multi-rol en la misma sucursal, sin combinación de permisos**: un usuario puede tener varios roles en la misma sucursal, pero cada rol mantiene sus propios permisos; se opera con un rol a la vez vía contexto activo (RN-15, §8).
 10. **Columna de tenant en toda tabla operativa** (ratifica RN-11): desnormalización deliberada a favor de RLS directo, estándar uniforme y defensa en profundidad; la consistencia se garantiza declarativamente con FKs compuestas, tenant desde los claims y `WITH CHECK` (RN-16, análisis en §9.3).
+11. **Invitaciones rechazables, con confirmación previa**: el click del email lleva siempre a una pantalla con el detalle de la invitación; la persona decide aceptar o rechazar (estado terminal Rechazada, notifica al invitador). Aplica a los caminos B y C (§7.5).
+12. **La creación de empresas pasa siempre por la pantalla de registro**, también para usuarios existentes (inician sesión dentro del flujo y el *initial setup* omite la creación del usuario); nunca desde adentro de la app, donde la persona opera en el contexto de una empresa que puede no ser suya (§7.3).
 
 ### 13.2 Preguntas abiertas (a definir antes de la v2)
 
@@ -767,6 +806,7 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 | 1.1.0 | 10/06/2026 | Aclaración del término RBAC; referencias cruzadas y sinónimos en el glosario; fusión de RN-03 y RN-04 (numeración de la v1.0.0) en la regla Owner-admin, con renumeración de las siguientes; justificación del formato de permisos `modulo.accion` y de la tabla `ROLE_PERMISSIONS`. |
 | 1.2.0 | 10/06/2026 | Índice del documento; unificación de los flujos de registro e invitación en una sola sección (§7) con visión global, bloques comunes y un camino por subsección; aclaración del OTP de verificación de email (no es código de referido); orden secuencial del *initial setup* según dependencias; corrección del diagrama de invitaciones (carriles separados por escenario); el contexto activo pasa a incluir el rol — multi-rol en la misma sucursal sin combinación de permisos (nueva RN-15); historial de cambios, aprobaciones y auditorías al final del documento. |
 | 1.3.0 | 10/06/2026 | Resolución de la pregunta abierta sobre tablas operativas: definición formal en el glosario y nueva §9.3 con el análisis de normalización de la columna de tenant (pros/contras de la desnormalización deliberada); nueva RN-16 (FKs compuestas, tenant desde los claims, `WITH CHECK`); caso borde de mezcla de tenants; decisión confirmada 10. |
+| 1.4.0 | 10/06/2026 | Ejemplo de multi-rol reemplazado por uno real (clínica: separación de funciones y auditoría); el camino A aclara que el registrante queda como Owner; resolución del email post-OTP en el registro (cuenta existente → login dentro del flujo, invitación pendiente → ofrece aceptarla, email nuevo → flujo normal) sin exponer enumeración de cuentas; la creación de empresas —también para usuarios existentes— pasa siempre por la pantalla de registro, nunca desde adentro de la app; invitaciones rechazables con pantalla de confirmación previa (nuevo estado Rechazada, RN-07 ampliada); el ciclo de vida de la invitación se adelanta a §7.5; nuevos casos borde y decisiones 11 y 12. |
 
 ---
 
@@ -778,9 +818,9 @@ Una fila por aprobador de la versión en circulación (los borradores superados 
 
 | Versión | Rol | Nombre | Fecha | Estado |
 |---|---|---|---|---|
-| 1.3.0 | CEO | — | — | Pendiente |
-| 1.3.0 | CTO | — | — | Pendiente |
-| 1.3.0 | Líder técnico | — | — | Pendiente |
+| 1.4.0 | CEO | — | — | Pendiente |
+| 1.4.0 | CTO | — | — | Pendiente |
+| 1.4.0 | Líder técnico | — | — | Pendiente |
 
 ### 17.2 Auditorías y revisiones
 
@@ -791,3 +831,4 @@ Registro de cada revisión del documento, haya derivado o no en un cambio de ver
 | 09/06/2026 | Franco Cruz | Documento completo (v1.0.0) | Cambios solicitados | Feedback que originó la v1.1.0. |
 | 10/06/2026 | Franco Cruz | Documento completo (v1.1.0) | Cambios solicitados | 8 puntos de revisión que originaron la v1.2.0. El análisis de tablas operativas/normalización quedó pendiente. |
 | 10/06/2026 | Franco Cruz | Tablas operativas y desnormalización del tenant (v1.2.0) | Decisión adoptada | Se ratifica RN-11 (columna de tenant en toda tabla operativa) con prevención declarativa de inconsistencias (nueva RN-16). Origen de la v1.3.0. |
+| 10/06/2026 | Franco Cruz | Flujos de incorporación y multi-rol (v1.3.0) | Cambios solicitados | 5 puntos de mejora que originaron la v1.4.0: ejemplo de multi-rol, Owner en el camino A, resolución del email en el registro, invitaciones rechazables y reubicación del ciclo de vida. |
