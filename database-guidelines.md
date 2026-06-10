@@ -1,6 +1,6 @@
 # Estandarización de Roles y Permisos — Eurekant LLC
 
-> **Versión:** 1.4.0 (conceptual — sin SQL)
+> **Versión:** 1.4.1 (conceptual — sin SQL)
 > **Fecha:** 10/06/2026
 > **Estado:** Borrador para validación interna
 > **Alcance:** Todos los proyectos de software desarrollados por Eurekant
@@ -93,7 +93,9 @@ Esta versión es **puramente conceptual**: define entidades, relaciones, flujos 
 | **Admin** | Rol por defecto, inmutable, con todos los permisos de la empresa. Puede haber varios **usuarios** con este rol en la misma empresa (ver §5.2). |
 | **Superadmin** | Dueño del software (Eurekant o el cliente que lo comercializa). Vista global del sistema (ver §10). |
 | **Contexto activo** | La asignación con la que el usuario está operando en este momento: `empresa + sucursal + rol` (ver §8). Extiende el *tenant context* de la literatura, incorporando además el rol. |
+| **JWT / Claims** | *JSON Web Token*: el token de sesión firmado que la aplicación adjunta en cada petición después del login. Los *claims* son los datos que viajan dentro del token (quién es el usuario, cuándo expira la sesión y, en este modelo, el contexto activo con los permisos de su rol). Al estar firmado, no puede alterarse sin invalidarlo (ver §8). |
 | **OTP** | *One-Time Password* (contraseña de un solo uso): código de 6 dígitos enviado por email para verificar la propiedad de la casilla durante el registro. (ver §7.2). |
+| **Enumeración de cuentas** | Ataque que consiste en probar emails ajenos en pantallas públicas (registro, invitaciones) para descubrir quién tiene cuenta en el sistema, a partir de diferencias en la respuesta. Se previene respondiendo siempre lo mismo y revelando información solo a quien verificó la casilla (ver §7.3 y §12). |
 | **Initial setup** | Función interna que popula los datos iniciales al crear una empresa (ver §7.3). |
 | **Tabla operativa** | Toda tabla que guarda datos del dominio de negocio de cada sistema (productos, ventas, turnos, stock, cajas, etc.). Se contrapone a las tablas del modelo estándar (`USERS`, `COMPANIES`, `ROLES`, …) y a los catálogos globales sin tenant (`PERMISSIONS`, `SYSTEM_SETTINGS`). Siempre lleva columna de tenant (ver §9.3 y RN-11). |
 
@@ -434,9 +436,12 @@ Características del *initial setup*:
 
 Resolución del email después del OTP:
 
-- **El OTP se envía siempre y la respuesta pública es idéntica**, exista o no la cuenta. La existencia de una cuenta o de una invitación pendiente se revela **únicamente después de validar el OTP**, es decir, solo a quien ya demostró ser dueño de la casilla. Así la pantalla de registro no sirve para enumerar cuentas (mismo criterio que en §7.4; ver §12).
+- **El OTP se envía siempre y la respuesta pública es idéntica**, exista o no la cuenta. La "respuesta pública" es todo lo que puede observar alguien que **no** tiene acceso a la casilla: los mensajes en pantalla, las respuestas de la API e incluso los tiempos de respuesta. La existencia de una cuenta o de una invitación pendiente se revela **únicamente después de validar el OTP**, es decir, solo a quien ya demostró ser dueño de la casilla. Así la pantalla de registro no sirve para la enumeración de cuentas (mismo criterio que en §7.4; ver §12).
 - **Usuario existente que crea otra empresa.** Si el email ya tiene cuenta, la persona inicia sesión con su contraseña dentro del mismo flujo y pasa directo a los datos de la empresa: el *initial setup* omite el paso 1 y la empresa nueva queda con su usuario existente como Owner (un usuario puede ser owner de N empresas). Esto ocurre **siempre desde la pantalla de registro, nunca desde adentro de la app**: dentro del software la persona opera en el contexto de una empresa —que puede ser ajena—, y un botón "crear mi propia empresa" ahí sería confuso (ej: un contador externo trabajando en el sistema de su cliente no debería ver esa opción).
 - **Invitación pendiente detectada.** Se ofrece aceptarla en ese momento (sigue por el camino B o C, según tenga cuenta o no) o continuar con el registro propio; en ese caso la invitación queda pendiente y puede aceptarse más adelante. Si la acepta en ese momento, el bloque OTP **no se repite**: la casilla ya quedó verificada en este mismo flujo. No son opciones excluyentes: la persona puede terminar siendo Owner de su empresa **y** miembro de la empresa que la invitó.
+
+> 💡 **Ejemplo práctico — por qué la respuesta debe ser idéntica**
+> Un atacante quiere saber si `gerente@clinicavital.com` usa el sistema. Va a la pantalla de registro y escribe ese email. Si el sistema respondiera "este email ya está registrado", el atacante acaba de confirmar su objetivo sin necesitar ninguna contraseña: ya sabe a quién dirigir un phishing. Con la respuesta idéntica, escriba el email que escriba, siempre observa lo mismo ("te enviamos un código") — y como no puede leer la casilla del gerente, no pasa de ahí. La información solo aparece para quien tipea el código correcto: el dueño real del email.
 
 > 💡 **Ejemplo práctico — initial setup específico por sistema**
 > En el sistema de turnos para clínicas, el *initial setup* además crea: los roles plantilla "Recepcionista" y "Profesional", una agenda de ejemplo y los horarios de atención por defecto. En el sistema de stock, crea: el rol plantilla "Depósito", una categoría "General" y un producto de ejemplo. El núcleo (empresa, sucursal, admin) es idéntico en ambos.
@@ -578,6 +583,9 @@ Reglas:
 - Cambiar de contexto refresca el token con los nuevos claims. No requiere cerrar sesión.
 - El sistema recuerda el último contexto usado para preseleccionarlo en el próximo login.
 
+> 💡 **Ejemplo práctico — el token como credencial de evento**
+> El JWT funciona como la credencial impresa de un congreso. Al acreditarse (login + elección de contexto), la persona recibe una credencial con sus datos a la vista: quién es, empresa, sucursal, rol y sus permisos — los *claims*. El guardia de cada puerta (cada política RLS) mira la credencial y decide al instante, sin llamar a la oficina central (sin consultar las tablas de roles) cada vez. Y la credencial está firmada: si alguien intenta agregarse un permiso a mano, la firma deja de coincidir y el sistema la rechaza.
+
 > 💡 **Ejemplo práctico — multi-rol sin combinación de permisos**
 > En el sistema de turnos de la clínica, la Dra. Paredes tiene dos roles en la misma sucursal: **Profesional** (atiende turnos y carga evoluciones en las historias clínicas de sus pacientes) y **Directora médica** (ve reportes, aprueba reintegros y accede a historias clínicas de otros profesionales). Atendiendo pacientes opera como Profesional: no ve reportes ni historias ajenas, aunque "tenga" el otro rol. Para la revisión mensual cambia su contexto a Directora médica. La ventaja es doble: **separación de funciones** — sus tareas cotidianas no cargan privilegios elevados, el mismo principio por el que un administrador de sistemas no usa root para el día a día — y **auditoría inequívoca** (RN-14): si aprueba un reintegro o corrige una historia clínica ajena, el registro (`created_by`/`updated_by` → `USER_ROLES`) muestra que lo hizo actuando como Directora médica, no como Profesional.
 
@@ -613,7 +621,10 @@ flowchart LR
 - El RLS cubre los cuatro verbos: lectura (qué filas veo), inserción (no puedo insertar filas de otra empresa — cláusula de verificación), actualización y borrado.
 - Los **permisos** también se evalúan en la base cuando corresponde: por ejemplo, insertar en `PRODUCTS` exige el permiso `products.create` en el contexto activo, no solo pertenecer a la empresa. Habrá funciones auxiliares estándar (`fn_has_permission`, etc.) reutilizables en todos los proyectos.
 - **Alcance empresa vs. sucursal según la tabla:** hay tablas donde todos los miembros de la empresa ven lo mismo (ej: catálogo de productos) y tablas donde solo se ve lo de la propia sucursal (ej: cajas, stock). Cada sistema define el alcance de cada tabla; el estándar provee ambos patrones de política.
-- **Trade-off conocido:** como los permisos viajan en el JWT, un cambio de rol/permisos tarda hasta la expiración del token en aplicarse (minutos). Para acciones críticas (desactivar un usuario) se complementa con verificación en base, que es inmediata. Este trade-off es estándar en la industria.
+- **Trade-off conocido:** el token es una **foto** de los permisos, tomada al armar el contexto activo. Se gana velocidad (la base no consulta las tablas de roles en cada query) a cambio de inmediatez: un cambio de rol o de permisos no se refleja en los tokens ya emitidos hasta que expiran y se renuevan (minutos). Por eso los tokens son de **vida corta**, y las acciones críticas (desactivar un usuario, suspender una empresa) se complementan con verificación en base, que aplica al instante. Es la decisión estándar de la industria (Supabase, Auth0, Firebase): la alternativa — verificar todo en base en cada query — elimina esa ventana de minutos al costo del rendimiento de todo el sistema, todo el tiempo.
+
+> 💡 **Ejemplo práctico — el cajero desvinculado**
+> Despiden a un cajero a las 10:00 y el admin lo desactiva al instante. Su token vigente expira a las 10:05: durante esos minutos, su "credencial" todavía dice *Cajero de la sucursal Centro*. Para las operaciones comunes esa ventana es tolerable y se cierra sola. Para lo crítico no se espera: la baja del usuario también se verifica en base (RN-08: pierde acceso de inmediato), igual que la suspensión de una empresa (`COMPANIES.is_active = false` corta el acceso vía RLS al instante).
 
 ### 9.3 Tablas operativas y la columna de tenant: análisis de normalización
 
@@ -807,6 +818,7 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 | 1.2.0 | 10/06/2026 | Índice del documento; unificación de los flujos de registro e invitación en una sola sección (§7) con visión global, bloques comunes y un camino por subsección; aclaración del OTP de verificación de email (no es código de referido); orden secuencial del *initial setup* según dependencias; corrección del diagrama de invitaciones (carriles separados por escenario); el contexto activo pasa a incluir el rol — multi-rol en la misma sucursal sin combinación de permisos (nueva RN-15); historial de cambios, aprobaciones y auditorías al final del documento. |
 | 1.3.0 | 10/06/2026 | Resolución de la pregunta abierta sobre tablas operativas: definición formal en el glosario y nueva §9.3 con el análisis de normalización de la columna de tenant (pros/contras de la desnormalización deliberada); nueva RN-16 (FKs compuestas, tenant desde los claims, `WITH CHECK`); caso borde de mezcla de tenants; decisión confirmada 10. |
 | 1.4.0 | 10/06/2026 | Ejemplo de multi-rol reemplazado por uno real (clínica: separación de funciones y auditoría); el camino A aclara que el registrante queda como Owner; resolución del email post-OTP en el registro (cuenta existente → login dentro del flujo, invitación pendiente → ofrece aceptarla, email nuevo → flujo normal) sin exponer enumeración de cuentas; la creación de empresas —también para usuarios existentes— pasa siempre por la pantalla de registro, nunca desde adentro de la app; invitaciones rechazables con pantalla de confirmación previa (nuevo estado Rechazada, RN-07 ampliada); el ciclo de vida de la invitación se adelanta a §7.5; nuevos casos borde y decisiones 11 y 12. |
+| 1.4.1 | 10/06/2026 | Aclaraciones conceptuales para lectores no técnicos, sin cambios de modelo ni de reglas: qué significa "respuesta pública idéntica" y qué es la enumeración de cuentas (§7.3 + glosario, con ejemplo del atacante); qué son el JWT y sus claims (§8 + glosario, con la analogía de la credencial de evento); y explicación completa del trade-off del token en §9.2 (qué se gana, qué se cede, ejemplo del cajero desvinculado). |
 
 ---
 
@@ -818,9 +830,9 @@ Una fila por aprobador de la versión en circulación (los borradores superados 
 
 | Versión | Rol | Nombre | Fecha | Estado |
 |---|---|---|---|---|
-| 1.4.0 | CEO | — | — | Pendiente |
-| 1.4.0 | CTO | — | — | Pendiente |
-| 1.4.0 | Líder técnico | — | — | Pendiente |
+| 1.4.1 | CEO | Franco Cruz | — | Pendiente |
+| 1.4.1 | CTO | — | — | Pendiente |
+| 1.4.1 | Líder técnico | — | — | Pendiente |
 
 ### 17.2 Auditorías y revisiones
 
@@ -832,3 +844,4 @@ Registro de cada revisión del documento, haya derivado o no en un cambio de ver
 | 10/06/2026 | Franco Cruz | Documento completo (v1.1.0) | Cambios solicitados | 8 puntos de revisión que originaron la v1.2.0. El análisis de tablas operativas/normalización quedó pendiente. |
 | 10/06/2026 | Franco Cruz | Tablas operativas y desnormalización del tenant (v1.2.0) | Decisión adoptada | Se ratifica RN-11 (columna de tenant en toda tabla operativa) con prevención declarativa de inconsistencias (nueva RN-16). Origen de la v1.3.0. |
 | 10/06/2026 | Franco Cruz | Flujos de incorporación y multi-rol (v1.3.0) | Cambios solicitados | 5 puntos de mejora que originaron la v1.4.0: ejemplo de multi-rol, Owner en el camino A, resolución del email en el registro, invitaciones rechazables y reubicación del ciclo de vida. |
+| 10/06/2026 | Franco Cruz (CEO) | Claridad conceptual (v1.4.0) | Cambios solicitados | Tres conceptos a aclarar para lectores no técnicos: respuesta pública idéntica / enumeración de cuentas, claims del JWT y trade-off del token. Origen de la v1.4.1. |
