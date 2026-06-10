@@ -1,9 +1,14 @@
 # Estandarización de Roles y Permisos — Eurekant LLC
 
-> **Versión:** 1.0 (conceptual — sin SQL)
-> **Fecha:** 09/06/2026
+> **Versión:** 1.1.0 (conceptual — sin SQL)
+> **Fecha:** 10/06/2026
 > **Estado:** Borrador para validación interna
 > **Alcance:** Todos los proyectos de software desarrollados por Eurekant
+
+| Versión | Fecha | Cambios |
+|---|---|---|
+| 1.0.0 | 09/06/2026 | Versión inicial. |
+| 1.1.0 | 10/06/2026 | Aclaración del término RBAC; referencias cruzadas y sinónimos en el glosario; fusión de RN-03 y RN-04 (regla Owner-admin) con renumeración; justificación del formato de permisos `modulo.accion` y de la tabla `ROLE_PERMISSIONS`. |
 
 ---
 
@@ -25,7 +30,7 @@ Esta versión es **puramente conceptual**: define entidades, relaciones, flujos 
 1. **Multi-tenant siempre.** Todo sistema soporta múltiples empresas y múltiples sucursales por empresa, **aunque el cliente actual no lo necesite**. Si el software se vende a un solo cliente con una sola sucursal, internamente igual existen `COMPANIES` y `BRANCHES` con un único registro. Esto garantiza escalabilidad sin migraciones traumáticas.
 2. **Aislamiento por RLS, no por filtros.** El código de aplicación **nunca** filtra por empresa/sucursal en sus queries. La base de datos (Row Level Security) devuelve únicamente los datos a los que el usuario tiene acceso según su contexto activo.
 3. **Roles a nivel empresa, asignaciones a nivel sucursal.** Un rol se define una vez por empresa y se reutiliza en todas sus sucursales. La asignación concreta de un usuario es siempre `usuario + rol + sucursal`.
-4. **Permisos granulares.** Un rol no es una etiqueta mágica que el código interpreta: es un **conjunto de permisos** tomados de un catálogo definido por cada sistema (modelo RBAC clásico, como usan Slack, Notion o AWS).
+4. **Permisos granulares.** Un rol no es una etiqueta mágica que el código interpreta: es un **conjunto de permisos** tomados de un catálogo definido por cada sistema. Este es el modelo **RBAC** (*Role-Based Access Control*, control de acceso basado en roles): los permisos nunca se asignan directamente a los usuarios, sino a roles, y los usuarios obtienen sus permisos al recibir roles. Es el modelo clásico que usan Slack, Notion o AWS.
 5. **Identidad global única.** Una persona tiene **una sola cuenta** (un email) y con ella puede pertenecer a N empresas y N sucursales con distintos roles.
 6. **Nada se borra, se desactiva.** Usuarios, roles y vínculos se desactivan (soft delete) para preservar el historial y la auditoría.
 7. **El superadmin vive fuera del modelo de empresas.** Es la capa de los dueños del software, con su propio panel y su propia parametrización global.
@@ -42,14 +47,14 @@ Esta versión es **puramente conceptual**: define entidades, relaciones, flujos 
 | **Usuario** | Identidad global de una persona (email único). Existe una sola vez en todo el sistema. |
 | **Empresa (Company)** | Tenant principal. Unidad de aislamiento de datos y dueña de los roles. |
 | **Sucursal (Branch)** | Subdivisión operativa de una empresa. Toda empresa tiene al menos una. |
-| **Rol** | Conjunto de permisos, definido a nivel empresa, reutilizable en todas sus sucursales. |
-| **Permiso** | Capacidad atómica de hacer algo (ej: `products.create`). Catálogo fijo por sistema. |
-| **Asignación (User Role)** | Vínculo `usuario + rol + sucursal`. Es la unidad central del modelo. |
-| **Owner** | El usuario que creó la empresa. Es admin, pero además es el dueño (único). |
-| **Admin** | Rol por defecto, inmutable, con todos los permisos de la empresa. Puede haber varios. |
-| **Superadmin** | Dueño del software (Eurekant o el cliente que lo comercializa). Vista global del sistema. |
-| **Contexto activo** | La combinación empresa + sucursal en la que el usuario está operando en este momento. |
-| **Initial setup** | Función interna que popula los datos iniciales al crear una empresa. |
+| **Rol** | Conjunto de permisos, definido a nivel empresa, reutilizable en todas sus sucursales (ver §5). |
+| **Permiso** | Capacidad atómica de hacer algo (ej: `products.create`). Catálogo fijo por sistema (ver §5.1). |
+| **Asignación (User Role)** | Vínculo `usuario + rol + sucursal`. Es la unidad central del modelo (ver §5.1). |
+| **Owner** | El usuario que creó la empresa. Es admin, pero además es el dueño (único). Diferencias con admin en §5.2. |
+| **Admin** | Rol por defecto, inmutable, con todos los permisos de la empresa. Puede haber varios **usuarios** con este rol en la misma empresa (ver §5.2). |
+| **Superadmin** | Dueño del software (Eurekant o el cliente que lo comercializa). Vista global del sistema (ver §11). |
+| **Contexto activo** | La combinación empresa + sucursal en la que el usuario está operando en este momento (ver §9). También llamado *tenant context* en la literatura; equivale a decir "empresa/sucursal activa". |
+| **Initial setup** | Función interna que popula los datos iniciales al crear una empresa (ver §7). |
 
 ---
 
@@ -102,6 +107,12 @@ flowchart LR
 
 **Catálogo de permisos.** Cada sistema define su catálogo de permisos atómicos con un código estandarizado `modulo.accion`. Por ejemplo: `products.create`, `products.read`, `products.update`, `products.delete`, `users.invite`, `roles.manage`, `reports.view`, `sales.refund`. El catálogo **no es editable por las empresas**: lo define el equipo de desarrollo y se carga como dato semilla. Es la frontera entre lo que el software *puede* hacer y lo que cada rol *permite* hacer.
 
+**Por qué el formato `modulo.accion`.** Es la convención de la industria (los *scopes* de OAuth, los permisos de Google Cloud IAM como `storage.objects.create`) y aporta cuatro ventajas concretas:
+1. **Namespacing** — `create` solo no dice nada, `products.create` es inequívoco y evita colisiones entre módulos;
+2. **Agrupación automática** — la pantalla de edición de roles agrupa los checkboxes por módulo (todo lo que empieza con `sales.` va junto) sin necesidad de estructura extra;
+3. **Legibilidad en código y logs** — un error `permission denied: sales.refund` se entiende al instante;
+4. **Consistencia entre proyectos** — las acciones usan siempre el mismo vocabulario (`create`, `read`, `update`, `delete`, más verbos específicos como `refund` o `invite`), así el catálogo de cualquier sistema Eurekant se lee igual.
+
 **Roles.** Un rol pertenece a una empresa y agrupa N permisos del catálogo. El usuario con permiso `roles.manage` (típicamente el admin) puede crear, modificar y eliminar roles de su empresa marcando/desmarcando permisos.
 
 **Asignación.** La unidad central del modelo: `usuario + rol + sucursal`. Reglas:
@@ -121,7 +132,7 @@ flowchart LR
 - El usuario que creó la empresa queda marcado como **Owner** (campo en la empresa que apunta a su usuario). El Owner es único, es admin como cualquier otro, pero:
   - No puede ser desactivado ni removido de la empresa por otros admins.
   - Es el único que puede transferir la propiedad (cambiar el Owner a otro usuario admin).
-- **Regla del último admin:** el sistema impide desactivar o quitarle el rol admin al último usuario admin activo de una empresa. Una empresa nunca puede quedar sin administrador.
+- **Regla Owner-admin:** el Owner siempre tiene el rol admin y nadie —**ni él mismo**— puede quitárselo; la única forma de que deje de ser admin es transferir el ownership a otro admin. Como consecuencia, una empresa **nunca puede quedar sin administrador** (siempre está el Owner como respaldo), y los demás admins sí pueden renunciar a su rol o ser removidos sin restricción.
 - Cada sistema puede definir **roles plantilla adicionales** en su *initial setup* (ej: "Vendedor", "Supervisor") que, a diferencia de `admin`, **sí** son editables y eliminables por la empresa. Nacen como sugerencia, no como imposición.
 
 > 💡 **Ejemplo práctico — owner vs admin**
@@ -268,6 +279,8 @@ erDiagram
 **`PERMISSIONS`** — Catálogo global del sistema (sin `company_id`). Se carga como dato semilla en cada deploy/migración. `permission_code` sigue el formato `modulo.accion`.
 
 **`ROLE_PERMISSIONS`** — Tabla puente rol ↔ permiso. Única por combinación (un rol no puede tener el mismo permiso dos veces). El rol `admin` no necesita filas aquí: sus permisos son "todo el catálogo" por definición (evita tener que actualizarlo cuando se agregan permisos nuevos).
+
+> **¿Por qué una tabla puente y no columnas booleanas en `ROLES`?** La relación rol ↔ permiso es muchos-a-muchos: un rol tiene N permisos y un mismo permiso está en N roles. Modelarlo como columnas (`order_c`, `order_u`, `menu_d`, …) implica que agregar un permiso nuevo requiere un `ALTER TABLE` + migración + tocar la UI, que la tabla `ROLES` sea estructuralmente distinta en cada proyecto (se rompe el estándar) y que la verificación de permisos no pueda ser una función genérica reutilizable. Con la tabla puente, agregar un permiso es un INSERT en el catálogo (la UI de roles lo muestra sola), las tablas son **idénticas en todos los proyectos** (solo cambia el contenido del catálogo) y `fn_has_permission('orders.create')` sirve igual en todos los sistemas. El costo de los joins se absorbe materializando los permisos efectivos en los claims del JWT al armar el contexto activo (§9): se calculan una vez por sesión, no en cada query.
 
 **`USER_ROLES`** — El corazón del modelo. Combinación única de `user_id + role_id + branch_id`. Regla de integridad crítica: **la sucursal y el rol deben pertenecer a la misma empresa** (se validará con trigger/función en la v2). Es también la tabla que otras tablas referencian en campos de auditoría como `created_by` (según la convención de nombres, apuntando a `user_role_id`, lo que registra no solo *quién* sino *con qué rol y en qué sucursal* hizo la acción).
 
@@ -515,19 +528,18 @@ Estas reglas son **obligatorias** en todos los proyectos. En la v2, cada una se 
 |---|---|
 | RN-01 | Toda empresa tiene al menos una sucursal, siempre (la crea el *initial setup*). |
 | RN-02 | El rol `admin` existe en toda empresa, tiene todos los permisos del catálogo (evaluación dinámica) y no puede modificarse ni eliminarse. |
-| RN-03 | Toda empresa tiene exactamente un Owner. El Owner no puede ser removido ni desactivado por otros; solo él transfiere la propiedad (a otro admin). |
-| RN-04 | No se puede desactivar ni quitar el rol al **último admin activo** de una empresa. |
-| RN-05 | En `USER_ROLES`, la sucursal y el rol deben pertenecer a la **misma empresa**. |
-| RN-06 | La combinación `usuario + rol + sucursal` es única (no se duplica una asignación). |
-| RN-07 | No se puede eliminar un rol con asignaciones activas; primero se reasignan los usuarios. Toda eliminación es soft delete. |
-| RN-08 | Una invitación pendiente es única por `email + empresa`; expira (parametrizable, default 7 días); es revocable; y al aceptarse valida que el rol y la sucursal sigan activos. |
-| RN-09 | La baja de un usuario de una empresa es soft delete: pierde acceso de inmediato, el historial queda intacto y puede reactivarse. |
-| RN-10 | El email de un usuario es único y case-insensitive a nivel global del sistema. |
-| RN-11 | Los nombres de rol y de sucursal son únicos **dentro de su empresa** (case-insensitive). |
-| RN-12 | Toda tabla operativa lleva `company_id` (y `branch_id` si su alcance es por sucursal), con RLS activo e índices sobre esas columnas. Sin excepciones. |
-| RN-13 | El catálogo `PERMISSIONS` solo lo modifica el equipo de desarrollo (datos semilla); las empresas no lo editan. |
-| RN-14 | El acceso superadmin se define en políticas explícitas y auditables, nunca como bypass genérico. |
-| RN-15 | Los campos de auditoría (`created_by`, `updated_by`) referencian `USER_ROLES`, no `USERS`, para congelar el contexto (quién, con qué rol, en qué sucursal). |
+| RN-03 | **Regla Owner-admin:** toda empresa tiene exactamente un Owner, que siempre tiene el rol admin. Nadie —ni él mismo— puede quitarle el rol ni desactivarlo; la única forma de dejar de ser admin es transferir la propiedad (a otro admin). Como consecuencia, una empresa nunca queda sin administrador; los demás admins sí pueden renunciar o ser removidos. |
+| RN-04 | En `USER_ROLES`, la sucursal y el rol deben pertenecer a la **misma empresa**. |
+| RN-05 | La combinación `usuario + rol + sucursal` es única (no se duplica una asignación). |
+| RN-06 | No se puede eliminar un rol con asignaciones activas; primero se reasignan los usuarios. Toda eliminación es soft delete. |
+| RN-07 | Una invitación pendiente es única por `email + empresa`; expira (parametrizable, default 7 días); es revocable; y al aceptarse valida que el rol y la sucursal sigan activos. |
+| RN-08 | La baja de un usuario de una empresa es soft delete: pierde acceso de inmediato, el historial queda intacto y puede reactivarse. |
+| RN-09 | El email de un usuario es único y case-insensitive a nivel global del sistema. |
+| RN-10 | Los nombres de rol y de sucursal son únicos **dentro de su empresa** (case-insensitive). |
+| RN-11 | Toda tabla operativa lleva `company_id` (y `branch_id` si su alcance es por sucursal), con RLS activo e índices sobre esas columnas. Sin excepciones. |
+| RN-12 | El catálogo `PERMISSIONS` solo lo modifica el equipo de desarrollo (datos semilla); las empresas no lo editan. |
+| RN-13 | El acceso superadmin se define en políticas explícitas y auditables, nunca como bypass genérico. |
+| RN-14 | Los campos de auditoría (`created_by`, `updated_by`) referencian `USER_ROLES`, no `USERS`, para congelar el contexto (quién, con qué rol, en qué sucursal). |
 
 ---
 
@@ -538,17 +550,17 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 | Escenario | Riesgo | Resolución en el modelo |
 |---|---|---|
 | Verificar si un email existe al invitar | Enumeración de cuentas: cualquiera podría descubrir qué emails usan el sistema | La verificación ocurre del lado del servidor solo para usuarios con `users.invite`, con límite de intentos. La respuesta pública nunca confirma existencia de cuentas. |
-| Invitación aceptada después de que el rol/sucursal fue eliminado | Asignación rota o acceso a algo inexistente | Validación al aceptar (RN-08): la invitación se invalida y se notifica para regenerarla. |
-| El último admin se va de la empresa | Empresa inaccesible para siempre | RN-03 y RN-04: el Owner no puede ser removido y el último admin no puede desactivarse. |
-| Eliminar un rol en uso | Usuarios sin acceso de un día para el otro | RN-07: eliminación bloqueada hasta reasignar. |
+| Invitación aceptada después de que el rol/sucursal fue eliminado | Asignación rota o acceso a algo inexistente | Validación al aceptar (RN-07): la invitación se invalida y se notifica para regenerarla. |
+| Todos los admins se van de la empresa | Empresa inaccesible para siempre | RN-03 (regla Owner-admin): el Owner siempre es admin y nadie puede quitarle el rol, así que siempre hay al menos un admin. |
+| Eliminar un rol en uso | Usuarios sin acceso de un día para el otro | RN-06: eliminación bloqueada hasta reasignar. |
 | Usuario desvinculado conserva token JWT vigente | Acceso residual por minutos | Trade-off conocido (§10.2): tokens de vida corta + verificación en base para acciones críticas. |
 | Dos roles distintos del mismo usuario en la misma sucursal | Ambigüedad de permisos | Permitido: los permisos efectivos son la **unión** de ambos roles. (Decisión a validar, ver §14.2.) |
 | Sistemas "chicos" que no usan sucursales | Tentación de simplificar el modelo y romper el estándar | Prohibido por principio 1: siempre existen `COMPANIES` y `BRANCHES`, aunque tengan una fila. La UI puede ocultar el concepto. |
 | Empresa suspendida (ej: falta de pago) | Usuarios siguen operando | `COMPANIES.is_active = false` corta el acceso vía RLS a todos sus miembros de inmediato, sin tocar sus asignaciones. |
 | Invitador escribe mal los datos del invitado | Datos incorrectos permanentes | La persona invitada revisa y corrige sus datos al registrarse (§8.2). |
 | Sucursal desactivada con usuarios asignados | Asignaciones colgando de algo inactivo | Las asignaciones de esa sucursal quedan inactivas en cascada lógica; si un usuario queda sin ninguna asignación activa, no puede ingresar a esa empresa. |
-| Borrado físico de usuarios | Historial y auditoría rotos | RN-09 y RN-15: soft delete + auditoría sobre `USER_ROLES`. |
-| Mismo nombre de rol en empresas distintas | Colisión de nombres | No hay colisión: la unicidad es por empresa (RN-11). |
+| Borrado físico de usuarios | Historial y auditoría rotos | RN-08 y RN-14: soft delete + auditoría sobre `USER_ROLES`. |
+| Mismo nombre de rol en empresas distintas | Colisión de nombres | No hay colisión: la unicidad es por empresa (RN-10). |
 
 ---
 
@@ -587,5 +599,5 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 ## 16. Próximos pasos
 
 1. Validar este documento con el equipo (especialmente §14.2).
-2. **v2:** DDL completo en SQL — tablas, constraints, índices, funciones (`fn_initial_setup`, `fn_has_permission`), triggers de integridad (RN-04, RN-05) y políticas RLS, todo según la Naming Convention Guide.
+2. **v2:** DDL completo en SQL — tablas, constraints, índices, funciones (`fn_initial_setup`, `fn_has_permission`), triggers de integridad (RN-03, RN-04) y políticas RLS, todo según la Naming Convention Guide.
 3. **v3:** kit reutilizable (migraciones base + seeds del catálogo de permisos) para iniciar cualquier proyecto nuevo de Eurekant con este cimiento ya instalado.
