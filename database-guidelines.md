@@ -1,6 +1,6 @@
 # Estandarización de Roles y Permisos — Eurekant LLC
 
-> **Versión:** 1.2.0 (conceptual — sin SQL)
+> **Versión:** 1.3.0 (conceptual — sin SQL)
 > **Fecha:** 10/06/2026
 > **Estado:** Borrador para validación interna
 > **Alcance:** Todos los proyectos de software desarrollados por Eurekant
@@ -32,7 +32,8 @@
 9. [RLS: aislamiento de datos sin filtros en el código](#9-rls-aislamiento-de-datos-sin-filtros-en-el-código)
    - [9.1 El principio](#91-el-principio)
    - [9.2 Cómo funcionará (conceptual, el detalle va en la v2)](#92-cómo-funcionará-conceptual-el-detalle-va-en-la-v2)
-   - [9.3 Qué ve cada capa](#93-qué-ve-cada-capa)
+   - [9.3 Tablas operativas y la columna de tenant: análisis de normalización](#93-tablas-operativas-y-la-columna-de-tenant-análisis-de-normalización)
+   - [9.4 Qué ve cada capa](#94-qué-ve-cada-capa)
 10. [Superadmin: la capa del dueño del software](#10-superadmin-la-capa-del-dueño-del-software)
     - [10.1 Concepto](#101-concepto)
     - [10.2 Parametrización global (`SYSTEM_SETTINGS`)](#102-parametrización-global-system_settings)
@@ -94,6 +95,7 @@ Esta versión es **puramente conceptual**: define entidades, relaciones, flujos 
 | **Contexto activo** | La asignación con la que el usuario está operando en este momento: `empresa + sucursal + rol` (ver §8). Extiende el *tenant context* de la literatura, incorporando además el rol. |
 | **OTP** | *One-Time Password* (contraseña de un solo uso): código de 6 dígitos enviado por email para verificar la propiedad de la casilla durante el registro. (ver §7.2). |
 | **Initial setup** | Función interna que popula los datos iniciales al crear una empresa (ver §7.3). |
+| **Tabla operativa** | Toda tabla que guarda datos del dominio de negocio de cada sistema (productos, ventas, turnos, stock, cajas, etc.). Se contrapone a las tablas del modelo estándar (`USERS`, `COMPANIES`, `ROLES`, …) y a los catálogos globales sin tenant (`PERMISSIONS`, `SYSTEM_SETTINGS`). Siempre lleva columna de tenant (ver §9.3 y RN-11). |
 
 ---
 
@@ -310,7 +312,7 @@ erDiagram
 
 **`USERS`** — Identidad global. Una fila por persona, vinculada al sistema de autenticación (en Supabase, referencia a `auth.users`). No contiene información de empresa: la pertenencia se expresa solo a través de `USER_ROLES`. El email es único y case-insensitive (`CITEXT`).
 
-**`COMPANIES`** — El tenant. `owner_id` marca al dueño único (ver §5.2). Casi todas las tablas operativas de cada sistema (productos, ventas, etc.) referencian `company_id` directa o indirectamente, porque es la columna sobre la que pivota el RLS.
+**`COMPANIES`** — El tenant. `owner_id` marca al dueño único (ver §5.2). Todas las tablas operativas de cada sistema (productos, ventas, etc.) llevan `company_id` (RN-11, ver §9.3), porque es la columna sobre la que pivota el RLS.
 
 **`BRANCHES`** — Siempre existe al menos una por empresa. Las tablas operativas que tienen alcance de sucursal (ej: stock, cajas) referencian `branch_id`.
 
@@ -571,14 +573,49 @@ flowchart LR
 
 ### 9.2 Cómo funcionará (conceptual, el detalle va en la v2)
 
-- Toda tabla operativa lleva `company_id` (y `branch_id` cuando su alcance es por sucursal). Estas columnas estarán **indexadas** siempre — es el principal factor de performance del RLS.
+- Toda tabla operativa lleva `company_id` (y `branch_id` cuando su alcance es por sucursal). Estas columnas estarán **indexadas** siempre — es el principal factor de performance del RLS. (Qué es una tabla operativa y por qué lleva estas columnas: ver §9.3.)
 - Las políticas comparan esas columnas contra el **contexto activo en los claims del JWT** (empresa, sucursal, rol y sus permisos), evitando subconsultas pesadas en cada fila.
 - El RLS cubre los cuatro verbos: lectura (qué filas veo), inserción (no puedo insertar filas de otra empresa — cláusula de verificación), actualización y borrado.
 - Los **permisos** también se evalúan en la base cuando corresponde: por ejemplo, insertar en `PRODUCTS` exige el permiso `products.create` en el contexto activo, no solo pertenecer a la empresa. Habrá funciones auxiliares estándar (`fn_has_permission`, etc.) reutilizables en todos los proyectos.
 - **Alcance empresa vs. sucursal según la tabla:** hay tablas donde todos los miembros de la empresa ven lo mismo (ej: catálogo de productos) y tablas donde solo se ve lo de la propia sucursal (ej: cajas, stock). Cada sistema define el alcance de cada tabla; el estándar provee ambos patrones de política.
 - **Trade-off conocido:** como los permisos viajan en el JWT, un cambio de rol/permisos tarda hasta la expiración del token en aplicarse (minutos). Para acciones críticas (desactivar un usuario) se complementa con verificación en base, que es inmediata. Este trade-off es estándar en la industria.
 
-### 9.3 Qué ve cada capa
+### 9.3 Tablas operativas y la columna de tenant: análisis de normalización
+
+**Qué es una tabla operativa.** Toda tabla que guarda datos del dominio de negocio de cada sistema: productos, ventas, turnos, stock, cajas, pacientes, etc. Es la tercera categoría de tablas del estándar:
+
+| Grupo | Ejemplos | ¿Lleva columna de tenant? |
+|---|---|---|
+| Tablas del modelo estándar | `USERS`, `COMPANIES`, `BRANCHES`, `ROLES`, `USER_ROLES`, `INVITATIONS` | Según su rol en el modelo (definido en §6) |
+| Catálogos globales | `PERMISSIONS`, `SYSTEM_SETTINGS` | No: son datos del sistema, no de las empresas |
+| **Tablas operativas** | `PRODUCTS`, `ORDERS`, turnos, stock, cajas… | **Sí, siempre** (RN-11): `company_id`, más `branch_id` si su alcance es por sucursal |
+
+**La decisión de diseño.** RN-11 exige `company_id` en toda tabla operativa **incluso cuando el tenant es derivable transitivamente** a través de sus relaciones (ej: una row de la tabla de ventas podría llegar a la empresa vía `ORDER_ITEMS` → `ORDERS` → `company_id`). Esto es **desnormalización deliberada**, y el análisis que la justifica queda documentado acá.
+
+*A favor de la columna redundante:*
+
+- **RLS directo y rápido.** La política compara una columna de la propia fila contra los claims del JWT. Sin la columna, la política necesita joins o subconsultas **por cada fila evaluada** — el principal asesino de performance del RLS en Postgres — y además cada tabla termina con una política distinta según su distancia a `COMPANIES`.
+- **Estándar uniforme.** Misma política, mismo índice y mismo patrón en todas las tablas de todos los proyectos, que es justamente el objetivo de este documento. Las políticas heterogéneas son más difíciles de auditar.
+- **Queries y código más simples.** Sin cadenas de 2, 3 o 4 joins solo para saber a qué empresa o sucursal pertenece una fila.
+- **Defensa en profundidad.** Cada fila se autodescribe: un bug en un join nunca puede "filtrar" datos de otro tenant.
+
+*En contra:*
+
+- **Espacio:** un UUID son 16 bytes por fila, más su índice. Real pero despreciable frente al costo de las alternativas.
+- **Riesgo de inconsistencia:** una fila podría quedar marcada con una empresa mientras sus relaciones apuntan a datos de otra. Es la única contra seria, y se elimina de forma declarativa (ver más abajo, RN-16).
+
+**Por qué la objeción de normalización pesa menos acá.** Las anomalías que la normalización previene son de **actualización**: datos redundantes que divergen cuando uno cambia y el otro no. Pero el `company_id` de una fila operativa es **inmutable** — una venta jamás se muda de empresa. Lo mismo aplica a `branch_id`: en las filas operativas también se trata como inmutable; un traslado entre sucursales (ej: stock) se modela como un movimiento nuevo — baja en una, alta en la otra — y no como un UPDATE de la columna, lo que además preserva el historial (principio 6). Eliminado el riesgo de actualización, lo único que queda es el riesgo de **inserción incorrecta**, que se resuelve con constraints:
+
+**Prevención de inconsistencias (RN-16).** La consistencia del tenant no depende de la disciplina del programador sino de tres capas que la base de datos impone sola:
+
+1. **FKs compuestas.** La tabla padre declara una unicidad que incluye el tenant (ej: `UNIQUE (company_id, order_id)` en `ORDERS`) y la tabla hija referencia con FK compuesta: `FOREIGN KEY (company_id, order_id) REFERENCES ORDERS (company_id, order_id)`. Con esto es **estructuralmente imposible** insertar una fila que mezcle tenants: si el `company_id` de la hija no coincide con el del padre, la FK no matchea y Postgres rechaza la operación.
+2. **La columna nunca la escribe la aplicación.** `company_id` (y `branch_id`) se completan con un `DEFAULT` que lee el contexto activo de los claims del JWT. El código de aplicación no pasa el valor, igual que no filtra por él (principio 2).
+3. **RLS en escritura (`WITH CHECK`).** Aunque alguien intentara forzar el valor, la política de inserción/actualización rechaza cualquier fila cuyo tenant no coincida con el contexto activo del token.
+
+> 💡 **Ejemplo práctico — el INSERT imposible**
+> Un desarrollador comete el error que más preocupa: estando en el contexto de la Empresa A, arma un renglón de venta que referencia un producto de la Empresa B. Capa 1: la FK compuesta `(company_id, product_id)` no encuentra ese producto en la Empresa A → INSERT rechazado. Y aunque esa FK no existiera, la capa 2 hace que el `company_id` salga del token (no del código), y la capa 3 rechaza cualquier fila que no sea del contexto activo. El error pasa de ser "un bug silencioso que mezcla datos de clientes" a ser **un error de constraint visible en desarrollo**.
+
+### 9.4 Qué ve cada capa
 
 | Capa | Responsabilidad sobre el acceso |
 |---|---|
@@ -646,11 +683,12 @@ Estas reglas son **obligatorias** en todos los proyectos. En la v2, cada una se 
 | RN-08 | La baja de un usuario de una empresa es soft delete: pierde acceso de inmediato, el historial queda intacto y puede reactivarse. |
 | RN-09 | El email de un usuario es único y case-insensitive a nivel global del sistema. |
 | RN-10 | Los nombres de rol y de sucursal son únicos **dentro de su empresa** (case-insensitive). |
-| RN-11 | Toda tabla operativa lleva `company_id` (y `branch_id` si su alcance es por sucursal), con RLS activo e índices sobre esas columnas. Sin excepciones. |
+| RN-11 | Toda tabla operativa lleva `company_id` (y `branch_id` si su alcance es por sucursal), con RLS activo e índices sobre esas columnas. Sin excepciones (análisis y justificación en §9.3). |
 | RN-12 | El catálogo `PERMISSIONS` solo lo modifica el equipo de desarrollo (datos semilla); las empresas no lo editan. |
 | RN-13 | El acceso superadmin se define en políticas explícitas y auditables, nunca como bypass genérico. |
 | RN-14 | Los campos de auditoría (`created_by`, `updated_by`) referencian `USER_ROLES`, no `USERS`, para congelar el contexto (quién, con qué rol, en qué sucursal). |
 | RN-15 | Un usuario puede tener varios roles en la misma sucursal, pero los permisos **nunca se combinan**: se opera bajo un único rol a la vez — el contexto activo incluye el rol (ver §8). |
+| RN-16 | **Prevención de inconsistencia de tenant:** las relaciones entre tablas operativas usan FKs compuestas que incluyen el tenant; `company_id`/`branch_id` nunca los escribe la aplicación (se completan por defecto desde los claims del contexto activo); y toda política RLS de inserción/actualización incluye `WITH CHECK` contra el contexto activo (ver §9.3). |
 
 ---
 
@@ -672,6 +710,7 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 | Sucursal desactivada con usuarios asignados | Asignaciones colgando de algo inactivo | Las asignaciones de esa sucursal quedan inactivas en cascada lógica; si un usuario queda sin ninguna asignación activa, no puede ingresar a esa empresa. |
 | Borrado físico de usuarios | Historial y auditoría rotos | RN-08 y RN-14: soft delete + auditoría sobre `USER_ROLES`. |
 | Mismo nombre de rol en empresas distintas | Colisión de nombres | No hay colisión: la unicidad es por empresa (RN-10). |
+| Fila operativa que referencia datos de otra empresa (mezcla de tenants por bug) | Inconsistencia de datos y fuga entre tenants | RN-16: FKs compuestas + tenant desde los claims + `WITH CHECK` hacen el INSERT/UPDATE inconsistente estructuralmente imposible (§9.3). |
 
 ---
 
@@ -679,7 +718,7 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 
 ### 13.1 Decisiones confirmadas
 
-Decisiones 1–8 validadas con Franco el 09/06/2026; decisión 9, el 10/06/2026.
+Decisiones 1–8 validadas con Franco el 09/06/2026; decisiones 9 y 10, el 10/06/2026.
 
 1. **Permisos granulares** con catálogo por sistema; los roles agrupan permisos.
 2. **Contexto activo seleccionable**: una cuenta global, selector de asignaciones (empresa/sucursal/rol), cambio sin re-login.
@@ -690,6 +729,7 @@ Decisiones 1–8 validadas con Franco el 09/06/2026; decisión 9, el 10/06/2026.
 7. **Invitaciones que expiran (7 días) y son revocables**, con estados auditables.
 8. **Baja de usuarios por desactivación** (soft delete) con historial intacto.
 9. **Multi-rol en la misma sucursal, sin combinación de permisos**: un usuario puede tener varios roles en la misma sucursal, pero cada rol mantiene sus propios permisos; se opera con un rol a la vez vía contexto activo (RN-15, §8).
+10. **Columna de tenant en toda tabla operativa** (ratifica RN-11): desnormalización deliberada a favor de RLS directo, estándar uniforme y defensa en profundidad; la consistencia se garantiza declarativamente con FKs compuestas, tenant desde los claims y `WITH CHECK` (RN-16, análisis en §9.3).
 
 ### 13.2 Preguntas abiertas (a definir antes de la v2)
 
@@ -697,7 +737,6 @@ Decisiones 1–8 validadas con Franco el 09/06/2026; decisión 9, el 10/06/2026.
 2. **Permisos a nivel empresa vs. sucursal en `SYSTEM_SETTINGS`:** ¿algunos parámetros podrán tener override por empresa (ej: comisión especial negociada con un cliente grande)? Propuesta: contemplar un alcance opcional por empresa en la v2.
 3. **Auditoría formal:** ¿incluimos en el estándar una tabla de log de eventos sensibles (cambios de roles, invitaciones, transferencias de ownership)? Propuesta: sí, como entidad estándar en la v2.
 4. **Invitaciones masivas:** ¿se necesita invitar por lote (CSV / múltiples emails)? Puede diseñarse después sin tocar el modelo.
-5. **Tablas operativas y desnormalización del tenant** (en análisis desde el 10/06/2026): definir formalmente qué es una "tabla operativa" y documentar el análisis de normalización de la columna `company_id` redundante (pros/contras, prevención de inconsistencias con FKs compuestas y `WITH CHECK`). Pendiente de discusión.
 
 ---
 
@@ -715,7 +754,7 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 ## 15. Próximos pasos
 
 1. Validar este documento con el equipo (especialmente §13.2).
-2. **v2:** DDL completo en SQL — tablas, constraints, índices, funciones (`fn_initial_setup`, `fn_has_permission`), triggers de integridad (RN-03, RN-04) y políticas RLS, todo según la Naming Convention Guide.
+2. **v2:** DDL completo en SQL — tablas, constraints, índices, funciones (`fn_initial_setup`, `fn_has_permission`), triggers de integridad (RN-03, RN-04), FKs compuestas y defaults desde claims con `WITH CHECK` (RN-16), y políticas RLS, todo según la Naming Convention Guide.
 3. **v3:** kit reutilizable (migraciones base + seeds del catálogo de permisos) para iniciar cualquier proyecto nuevo de Eurekant con este cimiento ya instalado.
 
 ---
@@ -725,8 +764,9 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 | Versión | Fecha | Cambios |
 |---|---|---|
 | 1.0.0 | 09/06/2026 | Versión inicial. |
-| 1.1.0 | 10/06/2026 | Aclaración del término RBAC; referencias cruzadas y sinónimos en el glosario; fusión de RN-03 y RN-04 (regla Owner-admin) con renumeración; justificación del formato de permisos `modulo.accion` y de la tabla `ROLE_PERMISSIONS`. |
+| 1.1.0 | 10/06/2026 | Aclaración del término RBAC; referencias cruzadas y sinónimos en el glosario; fusión de RN-03 y RN-04 (numeración de la v1.0.0) en la regla Owner-admin, con renumeración de las siguientes; justificación del formato de permisos `modulo.accion` y de la tabla `ROLE_PERMISSIONS`. |
 | 1.2.0 | 10/06/2026 | Índice del documento; unificación de los flujos de registro e invitación en una sola sección (§7) con visión global, bloques comunes y un camino por subsección; aclaración del OTP de verificación de email (no es código de referido); orden secuencial del *initial setup* según dependencias; corrección del diagrama de invitaciones (carriles separados por escenario); el contexto activo pasa a incluir el rol — multi-rol en la misma sucursal sin combinación de permisos (nueva RN-15); historial de cambios, aprobaciones y auditorías al final del documento. |
+| 1.3.0 | 10/06/2026 | Resolución de la pregunta abierta sobre tablas operativas: definición formal en el glosario y nueva §9.3 con el análisis de normalización de la columna de tenant (pros/contras de la desnormalización deliberada); nueva RN-16 (FKs compuestas, tenant desde los claims, `WITH CHECK`); caso borde de mezcla de tenants; decisión confirmada 10. |
 
 ---
 
@@ -734,13 +774,13 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 
 ### 17.1 Aprobaciones
 
-Una fila por aprobador y por versión mayor o menor del documento. El documento pasa de "Borrador" a "Vigente" cuando todas las aprobaciones de la versión están en estado *Aprobado*.
+Una fila por aprobador de la versión en circulación (los borradores superados antes de circular no se registran). El documento pasa de "Borrador" a "Vigente" cuando todas las aprobaciones de la versión están en estado *Aprobado*.
 
 | Versión | Rol | Nombre | Fecha | Estado |
 |---|---|---|---|---|
-| 1.2.0 | CEO | — | — | Pendiente |
-| 1.2.0 | CTO | — | — | Pendiente |
-| 1.2.0 | Líder técnico | — | — | Pendiente |
+| 1.3.0 | CEO | — | — | Pendiente |
+| 1.3.0 | CTO | — | — | Pendiente |
+| 1.3.0 | Líder técnico | — | — | Pendiente |
 
 ### 17.2 Auditorías y revisiones
 
@@ -749,4 +789,5 @@ Registro de cada revisión del documento, haya derivado o no en un cambio de ver
 | Fecha | Revisor | Alcance | Resultado | Observaciones |
 |---|---|---|---|---|
 | 09/06/2026 | Franco Cruz | Documento completo (v1.0.0) | Cambios solicitados | Feedback que originó la v1.1.0. |
-| 10/06/2026 | Franco Cruz | Documento completo (v1.1.0) | Cambios solicitados | 8 puntos de revisión que originaron la v1.2.0. El análisis de tablas operativas/normalización quedó pendiente (§13.2, punto 5). |
+| 10/06/2026 | Franco Cruz | Documento completo (v1.1.0) | Cambios solicitados | 8 puntos de revisión que originaron la v1.2.0. El análisis de tablas operativas/normalización quedó pendiente. |
+| 10/06/2026 | Franco Cruz | Tablas operativas y desnormalización del tenant (v1.2.0) | Decisión adoptada | Se ratifica RN-11 (columna de tenant en toda tabla operativa) con prevención declarativa de inconsistencias (nueva RN-16). Origen de la v1.3.0. |
