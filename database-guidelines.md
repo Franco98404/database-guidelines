@@ -1,9 +1,12 @@
 # Estandarización de Roles y Permisos — Eurekant LLC
 
-> **Versión:** 1.11.0 (conceptual — sin SQL)
-> **Fecha:** 13/Jun/26
-> **Estado:** Borrador para validación interna
-> **Alcance:** Todos los proyectos de software desarrollados por Eurekant
+> **Versión:** 1.12.0 (conceptual — sin SQL)  
+> **Fecha:** 13/Jun/26  
+> **Estado:** Borrador para validación interna  
+> **Alcance:** Todos los proyectos de software desarrollados por Eurekant  
+> **Tiempo estimado de lectura:** ~100 min (≈20.500 palabras)  
+> **Redactado por:** Franco Cruz, CEO  
+> **Elaborado por:** Eurekant LLC
 
 ---
 
@@ -931,7 +934,7 @@ Todo lo que sigue ([§9.3](#93-cómo-funcionará-conceptual-el-detalle-va-en-la-
 - **Trade-off conocido:** el token es una **foto** de los permisos, tomada al armar el contexto activo. Se gana velocidad (la base no consulta las tablas de roles en cada query) a cambio de inmediatez: un cambio de rol o de permisos no se refleja en los tokens ya emitidos hasta que expiran y se renuevan (hasta 1 hora con el valor estándar, ver [§8.1](#81-política-de-sesiones-y-renovación-de-tokens)). Por eso los tokens son de **vida corta**, y las acciones críticas (desactivar un usuario, suspender una empresa) se complementan con verificación en base, que aplica al instante. Es la decisión estándar de la industria (Supabase, Auth0, Firebase): la alternativa — verificar todo en base en cada query — elimina esa ventana de minutos al costo del rendimiento de todo el sistema, todo el tiempo. La política completa de duración y renovación de tokens está en [§8.1](#81-política-de-sesiones-y-renovación-de-tokens).
 
 > 💡 **Ejemplo práctico — el cajero desvinculado**
-> Despiden a un cajero a las 10:00 y el admin lo desactiva al instante. Su token vigente puede seguir siendo válido hasta las 11:00 (vida estándar de 1 hora, [§8.1](#81-política-de-sesiones-y-renovación-de-tokens)): durante esa ventana, su "credencial" todavía dice *Cajero de la sucursal Centro*. Para las operaciones comunes esa ventana es tolerable y se cierra sola. Para lo crítico no se espera: la baja del usuario también se verifica en base ([BR-08](#11-reglas-de-negocio-e-integridad-resumen-normativo): pierde acceso de inmediato), igual que la suspensión de una empresa (`COMPANIES.deactivated_at` corta el acceso vía RLS al instante).
+> Despiden a un cajero a las 10:00 y el admin lo desactiva al instante. Su token vigente puede seguir siendo válido hasta las 11:00 (vida estándar de 1 hora, [§8.1](#81-política-de-sesiones-y-renovación-de-tokens)): durante esa ventana, su "credencial" todavía dice *Cajero de la sucursal Centro*. Para las operaciones comunes esa ventana es tolerable y se cierra sola. Para lo crítico no se espera: la baja del usuario también se verifica en base ([BR-08](#11-reglas-de-negocio-e-integridad-resumen-normativo): pierde acceso de inmediato), igual que el cierre de una empresa (`COMPANIES.deactivated_at` corta el acceso vía RLS al instante).
 
 ### 9.4 Tablas operativas y la columna de tenant: análisis de normalización
 
@@ -1016,6 +1019,8 @@ Todo valor del sistema que pueda cambiar sin redeploy se guarda como parámetro,
 
 **Catálogo con metadatos, no solo clave-valor.** Cada parámetro tiene una ficha que declara: el tipo de dato y su rango válido (nadie puede guardar "banana" donde iba un número), el valor por defecto, **hasta qué nivel admite override**, **quién puede editarlo** y si sus cambios exigen **doble aprobación**. Por defecto todo se edita solo desde el panel superadmin; si la ficha lo habilita, un admin de empresa podría editar el override de su propia empresa desde la app (nunca el valor global). No es solo la lista de precios: es la lista de precios más las reglas de quién puede hacer descuentos y sobre qué productos — la comisión es negociable por cliente; los parámetros de seguridad (ej: los intentos máximos de OTP, [§8.2](#82-rate-limiting-y-anti-automatización)) se marcan como solo-globales y no los pisa nadie.
 
+> **¿Por qué clave-valor y no columnas?** Para **configuración**, clave-valor es el estándar de la industria — el caso clásico es `wp_options` de WordPress (`option_name`/`option_value`), y lo usan los *settings* y *feature flags* de Rails y Laravel. El motivo es el mismo que la tabla puente de permisos ([§6.1](#61-notas-por-entidad)): los parámetros son abiertos y distintos en cada proyecto. Con columnas, cada parámetro nuevo sería un `ALTER TABLE` + migración (con lock de tabla), `SYSTEM_SETTINGS` quedaría distinta en cada sistema (se rompe el estándar) y la cascada obligaría a duplicar columnas por nivel. Con clave-valor, un parámetro nuevo es **un INSERT**, la tabla es **idéntica en todos los proyectos**, `fn_get_setting('clave')` sirve para cualquiera y cada override es otra fila. **La contracara:** llevado al extremo (EAV), clave-valor es mal patrón para *datos de negocio* —pierde validación de tipos y complica las consultas—, por eso acá se usa **solo para configuración** (valores pocos y dispersos) y la validación se recupera con el catálogo de metadatos que declara tipo y rango por parámetro.
+
 **Cascada global → empresa → sucursal.** Un parámetro tiene su valor general y, donde se haya negociado o configurado, un valor específico: **gana siempre el más específico**. La lectura pasa por una única función (`fn_get_setting` en la v2): ningún código consulta las tablas de settings directamente — como preguntar en recepción en vez de revolver el archivo; si mañana la cascada cambia, se ajusta un solo lugar.
 
 ```mermaid
@@ -1051,6 +1056,7 @@ Por qué este diseño escala bien:
 | `support.whatsapp` · `support.email` | Canales de soporte. |
 | `legal.terms_url` · `legal.privacy_url` · `legal.data_deletion_url` | Términos y condiciones, política de privacidad y solicitud de eliminación de datos. |
 | `system.maintenance_mode` | Interruptor de mantenimiento: deja la app en solo-lectura o bloqueada, con un mensaje. Distinto del comunicado, que solo informa. |
+| `billing.status` (override por empresa) | Estado de cobranza: `active` / `grace` / `suspended`. En `suspended` (falta de pago) la app queda bloqueada o en solo-lectura con aviso de pago — **reversible apenas se paga, sin tocar los datos**. Distinto del cierre definitivo (`deactivated_at`). |
 
 Son globales por defecto, pero la misma cascada permite override por empresa (ej: cada negocio con su propio WhatsApp de soporte). Los **avisos con contenido y vigencia** —«mantenimiento de 2 a 4 AM», «estamos revisando un problema»— no son una key sino una entidad propia, los **comunicados** (`ANNOUNCEMENTS`, [§6](#6-modelo-de-entidades-conceptual)): tienen título, cuerpo, tipo, ventana y destinatarios.
 
@@ -1099,7 +1105,7 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 | Usuario desvinculado conserva token JWT vigente | Acceso residual acotado (hasta 1 hora, [§8.1](#81-política-de-sesiones-y-renovación-de-tokens)) | Trade-off conocido ([§9.3](#93-cómo-funcionará-conceptual-el-detalle-va-en-la-v2)): tokens de vida corta + verificación en base para acciones críticas. |
 | Dos roles distintos del mismo usuario en la misma sucursal | Ambigüedad de permisos | Permitido, **sin combinar permisos**: el usuario opera con un rol a la vez; el contexto activo incluye el rol ([§8](#8-contexto-activo-en-qué-empresa-sucursal-y-rol-estoy-parado), [BR-15](#11-reglas-de-negocio-e-integridad-resumen-normativo)). |
 | Sistemas "chicos" que no usan sucursales | Tentación de simplificar el modelo y romper el estándar | Prohibido por principio 1: siempre existen `COMPANIES` y `BRANCHES`, aunque tengan una fila. La UI puede ocultar el concepto. |
-| Empresa suspendida (ej: falta de pago) | Usuarios siguen operando | `COMPANIES.deactivated_at` (con fecha) corta el acceso vía RLS a todos sus miembros de inmediato, sin tocar sus asignaciones. |
+| Empresa suspendida por falta de pago | Usuarios siguen operando | `billing.status = suspended` (override por empresa, [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides)) bloquea o pone en solo-lectura vía RLS, con aviso de pago — reversible al regularizar. El cierre definitivo es `COMPANIES.deactivated_at`. |
 | Invitador escribe mal los datos del invitado | Datos incorrectos permanentes | La persona invitada revisa y corrige sus datos al registrarse ([§7.6](#76-camino-b--registro-por-invitación-usuario-nuevo)). |
 | Sucursal desactivada con usuarios asignados | Asignaciones colgando de algo inactivo | Las asignaciones de esa sucursal quedan inactivas en cascada lógica; si un usuario queda sin ninguna asignación activa, no puede ingresar a esa empresa. |
 | Borrado físico de usuarios | Historial y auditoría rotos | [BR-08](#11-reglas-de-negocio-e-integridad-resumen-normativo) y [BR-14](#11-reglas-de-negocio-e-integridad-resumen-normativo): soft delete + auditoría sobre `USER_ROLES`. |
@@ -1161,6 +1167,7 @@ Todas las decisiones fueron validadas con Franco Cruz en la fecha indicada.
 | 32 | **Baja lógica por `deactivated_at`** | Reemplaza el booleano `is_active` por un timestamp anulable: misma filtración, pero registra cuándo se dio de baja (y con `updated_by`, quién). | 13/Jun/26 | [§6](#6-modelo-de-entidades-conceptual), [BR-21](#11-reglas-de-negocio-e-integridad-resumen-normativo) |
 | 33 | **`SYSTEM_SETTINGS`: keys conocidas, version-gating y comunicados** | Keys estándar (versión por plataforma con forzado/suave, tiendas/web, soporte, legales, `maintenance_mode`) y entidad `ANNOUNCEMENTS` para avisos con vigencia. | 13/Jun/26 | [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides), [§6](#6-modelo-de-entidades-conceptual) |
 | 34 | **Foto con placeholder en personas, empresas y sucursales** | `photo_url` + `photo_blur_hash` (miniatura borrosa instantánea). BlurHash o ThumbHash en la v2. | 13/Jun/26 | [§6](#6-modelo-de-entidades-conceptual) |
+| 35 | **Suspensión por falta de pago (`billing.status`)** | Estado de cobranza por empresa (`active`/`grace`/`suspended`) como override de `SYSTEM_SETTINGS`; en `suspended` la app se bloquea o queda en solo-lectura con aviso de pago, reversible. Distinto del cierre definitivo (`deactivated_at`). La facturación completa (facturas, vencimientos, auto-suspensión) es módulo de la v2. | 13/Jun/26 | [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides), [§12](#12-casos-borde-y-puntos-de-fuga-analizados) |
 
 ### 13.2 Preguntas abiertas (a definir antes de la v2)
 
@@ -1218,6 +1225,7 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 | 1.9.0 | 13/Jun/26 | Terminología y refinamientos del modelo de usuarios finales: glosario de **staff** (se mantiene el término — estándar de Shopify/Django) y renombre **«carpeta de cliente» → «ficha de cliente»** (estándar del SaaS hispano, transversal a salud y gastronomía) en todo el documento, conservando las menciones históricas (decisión [28](#131-decisiones-confirmadas)). Antifraude del **contacto provisional cargado por el staff**: nueva [BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo), regla y ejemplo en [§7.9](#79-camino-d--registro-del-usuario-final), caso borde y decisión [27](#131-decisiones-confirmadas) (cierra el hueco del empleado que carga su propio contacto para robar beneficios). Las **tres familias de acceso** ascienden a subsección propia [§9.2](#92-quién-accede-las-tres-familias-de-acceso) (con la tabla staff / identidad propia / catálogo público), renumerando [§9.2](#92-quién-accede-las-tres-familias-de-acceso)→[§9.5](#95-qué-ve-cada-capa). Nota de `INVITATIONS` ([§6.1](#61-notas-por-entidad)) unificada con la redacción de [§7.5](#75-ciclo-de-vida-de-una-invitación) («refleja el estado actual»). Redacción del vínculo ficha↔cuenta sin la palabra «reclamo». |
 | 1.10.0 | 13/Jun/26 | Glosario ampliado con siete términos núcleo (tenant/multi-tenancy, RLS, RBAC, soft delete, catálogo público, UUID, dato semilla). Nuevo **principio rector «ante la duda, preguntar — no asumir»** al inicio de [§1](#1-propósito-y-alcance) (decisión [29](#131-decisiones-confirmadas)). Formato de fecha unificado a `DD/MMM/YY` en todo el documento. **Referencias cruzadas clickeables**: cada `§`, `BR-NN` y `decisión N` enlaza a su sección — los `§` al anclaje exacto, `BR`/`decisión` a su tabla. Nueva **[§13.3](#133-temas-diferidos-a-la-v2) «Temas diferidos a la v2»** (fusión de fichas, umbrales del antifraude, prueba fuerte por rubro), referenciada desde [§15](#15-próximos-pasos). |
 | 1.11.0 | 13/Jun/26 | Modelo más completo y técnico: **cuádruple de auditoría** (`created_at`/`updated_at`/`created_by`/`updated_by`) en toda tabla ([BR-20](#11-reglas-de-negocio-e-integridad-resumen-normativo), decisión [31](#131-decisiones-confirmadas)) y **baja lógica por `deactivated_at`** reemplazando el booleano `is_active` ([BR-21](#11-reglas-de-negocio-e-integridad-resumen-normativo), decisión [32](#131-decisiones-confirmadas)). **Foto con placeholder** `photo_url` + `photo_blur_hash` en personas, empresas y sucursales (decisión [34](#131-decisiones-confirmadas)). `SYSTEM_SETTINGS`: keys conocidas (versión por plataforma con update forzado/suave, tiendas, soporte, legales, `maintenance_mode`) y nueva entidad **comunicados** (`ANNOUNCEMENTS`) para avisos con vigencia (decisión [33](#131-decisiones-confirmadas), [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides)). Nuevo **Anexo A — Checklist de implementación** (decisión [30](#131-decisiones-confirmadas)). [§13.3](#133-temas-diferidos-a-la-v2): diferida la segmentación de comunicados (D-04). |
+| 1.12.0 | 13/Jun/26 | Encabezado con saltos de línea reales, **tiempo estimado de lectura** (~100 min, ≈20.500 palabras a 200 wpm) y atribución (Redactado por Franco Cruz, CEO; Elaborado por Eurekant LLC). Nueva key `billing.status` para **suspensión por falta de pago** (reversible, distinta del cierre por `deactivated_at`) y caso borde de [§12](#12-casos-borde-y-puntos-de-fuga-analizados) actualizado (decisión [35](#131-decisiones-confirmadas)). Recuadro **«¿por qué clave-valor y no columnas?»** en [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides) (estándar para configuración: `wp_options`, feature flags; con la contracara de EAV). |
 
 ---
 
@@ -1229,9 +1237,9 @@ Una fila por aprobador de la versión en circulación (los borradores superados 
 
 | Versión | Rol | Nombre | Fecha | Estado |
 |---|---|---|---|---|
-| 1.11.0 | CEO | Franco Cruz | — | Pendiente |
-| 1.11.0 | CTO | — | — | Pendiente |
-| 1.11.0 | Líder técnico | — | — | Pendiente |
+| 1.12.0 | CEO | Franco Cruz | — | Pendiente |
+| 1.12.0 | CTO | — | — | Pendiente |
+| 1.12.0 | Líder técnico | — | — | Pendiente |
 
 ### 17.2 Auditorías y revisiones
 
@@ -1251,6 +1259,7 @@ Registro de cada revisión del documento, haya derivado o no en un cambio de ver
 | 13/Jun/26 | Franco Cruz | Terminología, seguridad de fichas y familias de acceso (v1.8.0) | Decisiones adoptadas | 6 puntos: glosario de «staff» (se mantiene, con investigación del término estándar — Shopify/Django/Zendesk); renombre «carpeta»→«ficha de cliente» (con investigación: estándar hispano transversal a salud y gastronomía) — decisión [28](#131-decisiones-confirmadas); redacción del vínculo sin «reclamo»; unificación de la nota de `INVITATIONS` con [§7.5](#75-ciclo-de-vida-de-una-invitación); antifraude del contacto cargado por el staff ([BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo), decisión [27](#131-decisiones-confirmadas)); y subsección propia para las tres familias de acceso ([§9.2](#92-quién-accede-las-tres-familias-de-acceso)). Origen de la v1.9.0. |
 | 13/Jun/26 | Franco Cruz | Glosario, principio rector, formato de fecha, navegación y temas diferidos (v1.9.0) | Cambios solicitados | 5 puntos que originaron la v1.10.0: «tenant» y otros seis términos al glosario; principio «ante la duda, preguntar — no asumir» al inicio (decisión [29](#131-decisiones-confirmadas)); formato de fecha unificado a DD/MMM/YY; referencias cruzadas clickeables (§ a la sección exacta, BR/decisión a su tabla); y nueva [§13.3](#133-temas-diferidos-a-la-v2) de temas diferidos a la v2. |
 | 13/Jun/26 | Franco Cruz | Auditoría, ciclo de vida y parametrización del sistema (v1.10.0) | Cambios solicitados | 4 puntos que originaron la v1.11.0: checklist de implementación (Anexo A, decisión [30](#131-decisiones-confirmadas)); cuádruple de auditoría en toda tabla ([BR-20](#11-reglas-de-negocio-e-integridad-resumen-normativo), decisión [31](#131-decisiones-confirmadas)); `SYSTEM_SETTINGS` con keys conocidas, version-gating y comunicados `ANNOUNCEMENTS` (decisión [33](#131-decisiones-confirmadas)) — con investigación de BlurHash/ThumbHash; y fotos con placeholder + baja lógica por `deactivated_at` (decisiones [32](#131-decisiones-confirmadas) y [34](#131-decisiones-confirmadas)). |
+| 13/Jun/26 | Franco Cruz | Auditoría en toda tabla, baja por deactivated_at, fotos y comunicados (v1.11.0) | Cambios solicitados | 4 puntos que originaron la v1.12.0: encabezado con tiempo de lectura y atribución; key `billing.status` para morosidad (decisión [35](#131-decisiones-confirmadas)); recuadro «por qué clave-valor» en [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides) con investigación (`wp_options`, EAV). Los pedidos de explicación conceptual de la tabla puente y de `modulo.accion` se descartaron por decisión de Franco. |
 
 ---
 
