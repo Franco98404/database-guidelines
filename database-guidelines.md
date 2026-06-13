@@ -1,7 +1,7 @@
 # Estandarización de Roles y Permisos — Eurekant LLC
 
-> **Versión:** 1.7.0 (conceptual — sin SQL)
-> **Fecha:** 11/Jun/2026
+> **Versión:** 1.8.0 (conceptual — sin SQL)
+> **Fecha:** 12/Jun/2026
 > **Estado:** Borrador para validación interna
 > **Alcance:** Todos los proyectos de software desarrollados por Eurekant
 
@@ -15,6 +15,7 @@
 3. [Glosario](#3-glosario)
 4. [Modelo de tenancy: Usuario → Empresa → Sucursal](#4-modelo-de-tenancy-usuario--empresa--sucursal)
    - [4.1 Reglas del modelo de tenancy](#41-reglas-del-modelo-de-tenancy)
+   - [4.2 Usuarios finales: la otra cara del sistema](#42-usuarios-finales-la-otra-cara-del-sistema)
 5. [Modelo de roles y permisos](#5-modelo-de-roles-y-permisos)
    - [5.1 Cómo se compone el acceso](#51-cómo-se-compone-el-acceso)
    - [5.2 Roles por defecto: `admin` y el concepto de Owner](#52-roles-por-defecto-admin-y-el-concepto-de-owner)
@@ -22,7 +23,7 @@
 6. [Modelo de entidades (conceptual)](#6-modelo-de-entidades-conceptual)
    - [6.1 Notas por entidad](#61-notas-por-entidad)
 7. [Flujos de incorporación de usuarios](#7-flujos-de-incorporación-de-usuarios)
-   - [7.1 Visión global: los tres caminos de entrada](#71-visión-global-los-tres-caminos-de-entrada)
+   - [7.1 Visión global: los caminos de entrada del staff](#71-visión-global-los-caminos-de-entrada-del-staff)
    - [7.2 Bloque común: verificación de email por OTP](#72-bloque-común-verificación-de-email-por-otp)
    - [7.3 Camino A — Registro por cuenta propia e *initial setup*](#73-camino-a--registro-por-cuenta-propia-e-initial-setup)
    - [7.4 Caminos B y C — Invitación: creación y envío](#74-caminos-b-y-c--invitación-creación-y-envío)
@@ -30,6 +31,7 @@
    - [7.6 Camino B — Registro por invitación (usuario nuevo)](#76-camino-b--registro-por-invitación-usuario-nuevo)
    - [7.7 Camino C — Aceptación o rechazo (usuario existente)](#77-camino-c--aceptación-o-rechazo-usuario-existente)
    - [7.8 Transferencia de ownership](#78-transferencia-de-ownership)
+   - [7.9 Camino D — Registro del usuario final](#79-camino-d--registro-del-usuario-final)
 8. [Contexto activo: en qué empresa, sucursal y rol estoy parado](#8-contexto-activo-en-qué-empresa-sucursal-y-rol-estoy-parado)
    - [8.1 Política de sesiones y renovación de tokens](#81-política-de-sesiones-y-renovación-de-tokens)
    - [8.2 Rate limiting y anti-automatización](#82-rate-limiting-y-anti-automatización)
@@ -63,6 +65,8 @@ El objetivo es que cualquier desarrollador del equipo pueda abrir cualquier proy
 
 Este documento es **puramente conceptual**: define entidades, relaciones, flujos y reglas de negocio, sin una línea de SQL. Una vez validado, se generará el **documento técnico (v2)** con el código SQL definitivo (tablas, constraints, funciones, triggers y políticas RLS), siguiendo la [Naming Convention Guide](https://app.clickup.com/9002039309/v/dc/8c90e0d-10194/8c90e0d-6114) de Eurekant. Son dos documentos separados a propósito (ver §1.1).
 
+**Agnóstico del lado del cliente, fijo del lado del backend.** El estándar define la capa de datos y los flujos sobre **Supabase/Postgres**, y funciona igual sin importar el lenguaje o framework de la aplicación (Flutter, web, etc.): cualquier cliente consume el mismo modelo. Cuando el documento menciona Flutter o `supabase_flutter`, lo hace a modo de ejemplo por ser la plataforma principal actual de Eurekant — las mismas capacidades existen en todos los SDKs oficiales de Supabase (decisión 24).
+
 > 💡 **Ejemplo práctico — ¿por qué estandarizar?**
 > Eurekant desarrolla un sistema de turnos para una clínica y un sistema de stock para una distribuidora. Son rubros totalmente distintos, pero ambos necesitan: usuarios, empresas, sucursales, roles, invitaciones y aislamiento de datos. Si ambos usan este estándar, un desarrollador que pasa del proyecto "clínica" al proyecto "distribuidora" ya sabe cómo funciona el 40% del sistema antes de leer una línea de código.
 
@@ -89,10 +93,10 @@ Las razones de la separación:
 ## 2. Principios de diseño
 
 1. **Multi-tenant siempre.** Todo sistema soporta múltiples empresas y múltiples sucursales por empresa, **aunque el cliente actual no lo necesite**. Si el software se vende a un solo cliente con una sola sucursal, internamente igual existen `COMPANIES` y `BRANCHES` con un único registro. Esto garantiza escalabilidad sin migraciones traumáticas.
-2. **Aislamiento por RLS, no por filtros.** El código de aplicación **nunca** filtra por empresa/sucursal en sus queries. La base de datos (Row Level Security) devuelve únicamente los datos a los que el usuario tiene acceso según su contexto activo.
+2. **Aislamiento por RLS, no por filtros.** El código de aplicación **nunca** filtra por empresa/sucursal en sus queries. La base de datos (Row Level Security) devuelve únicamente los datos a los que quien consulta tiene acceso: por su contexto activo (staff), por identidad propia (usuario final) o por catálogo público (§9.2).
 3. **Roles a nivel empresa, asignaciones a nivel sucursal.** Un rol se define una vez por empresa y se reutiliza en todas sus sucursales. La asignación concreta de un usuario es siempre `usuario + rol + sucursal`.
 4. **Permisos granulares.** Un rol no es una etiqueta mágica que el código interpreta: es un **conjunto de permisos** tomados de un catálogo definido por cada sistema. Este es el modelo **RBAC** (*Role-Based Access Control*, control de acceso basado en roles): los permisos nunca se asignan directamente a los usuarios, sino a roles, y los usuarios obtienen sus permisos al recibir roles. En este estándar, los permisos efectivos en cada momento son únicamente los del rol del contexto activo, nunca la suma de todos los roles del usuario (ver §8 y BR-15). Es el modelo clásico que usan Slack, Notion o AWS.
-5. **Identidad global única.** Una persona tiene **una sola cuenta** (un email) y con ella puede pertenecer a N empresas y N sucursales con distintos roles.
+5. **Identidad global única.** Una persona tiene **una sola cuenta** (un email) y con ella puede pertenecer a N empresas y N sucursales con distintos roles — y, como usuario final, ser cliente de N negocios (§4.2).
 6. **Nada se borra, se desactiva.** Usuarios, roles y vínculos se desactivan (soft delete) para preservar el historial y la auditoría.
 7. **El superadmin vive fuera del modelo de empresas.** Es la capa de los dueños del software, con su propio panel y su propia parametrización global.
 
@@ -124,7 +128,9 @@ Las razones de la separación:
 | **Rate limiting** | Límite a la cantidad de veces que una operación puede ejecutarse en una ventana de tiempo (contado por IP, por email o por proyecto, según la operación). Primera defensa contra bots, fuerza bruta y abuso de los endpoints públicos (ver §8.2). |
 | **CAPTCHA** | Desafío que distingue personas de bots en los endpoints públicos. Estándar de Eurekant: Cloudflare Turnstile, integrado nativamente en Supabase e invisible para el usuario en la gran mayoría de los casos (ver §8.2). |
 | **Override (de parámetro)** | Valor específico de una empresa o sucursal que reemplaza al valor global de un parámetro del sistema; gana siempre el más específico (ver §10.2). |
-| **BR (Business Rule)** | Regla de negocio obligatoria del estándar (BR-01…BR-17, ver §11). Mismo prefijo que usan los SRS de Eurekant. |
+| **BR (Business Rule)** | Regla de negocio obligatoria del estándar (BR-01…BR-18, ver §11). Mismo prefijo que usan los SRS de Eurekant. |
+| **Usuario final** | Persona que consume lo que los negocios ofrecen (turnos, pedidos, puntos) en lugar de operarlos. No es staff: no tiene roles ni permisos; su cuenta nace libre y su acceso es de identidad propia (ver §4.2). |
+| **Carpeta de cliente (`COMPANY_CUSTOMERS`)** | El registro de una persona como cliente de un negocio concreto, exista o no su cuenta en la app; si tiene cuenta, la carpeta la referencia (ver §4.2 y §7.9). |
 
 ---
 
@@ -159,6 +165,30 @@ Puntos clave del diagrama:
 - Toda empresa nace con **exactamente una sucursal** (creada por el *initial setup*). Aunque el negocio no use el concepto de "sucursal", existe una llamada "Principal" (u otro nombre por defecto definido por el sistema).
 - Una sucursal pertenece a **una y solo una** empresa. No hay sucursales compartidas.
 - Los datos operativos del sistema (productos, ventas, turnos, etc.) siempre cuelgan de la empresa, y cuando aplica, también de la sucursal.
+
+### 4.2 Usuarios finales: la otra cara del sistema
+
+Todo lo anterior describe al **staff**: las personas que *operan* el sistema (dueños, gerentes, cajeros, profesionales). Pero muchos sistemas tienen además **usuarios finales**: las personas que *consumen* lo que el negocio ofrece — el paciente que saca turnos, el comensal que junta puntos. La analogía del teatro: el actor y el espectador son ambos personas con cuenta, pero el actor tiene **credencial de backstage** (un rol que define qué puede operar) y el espectador tiene **su entrada** (un vínculo de cliente que define qué consume). El estándar los distingue por el tipo de vínculo, nunca por un "rol de usuario final" (BR-18).
+
+El modelo del usuario final tiene cuatro piezas:
+
+1. **La cuenta es global y nace libre.** El usuario final se registra desde la app (camino D, §7.9) y eso crea solo su cuenta en `USERS` — sin empresa, sin rol, sin vínculo con ningún negocio. Puede no consumir nunca; su cuenta existe igual.
+2. **Explorar no requiere vínculo.** Ver los negocios del sistema es una lectura del **catálogo público** (perfiles de las empresas listadas), disponible para cualquier usuario autenticado sin relación previa. Es una familia propia de políticas RLS (§9.2); cada sistema decide si su catálogo es abierto.
+3. **La carpeta del cliente existe en cada negocio, con o sin cuenta.** `COMPANY_CUSTOMERS` es la carpeta de una persona en un negocio concreto: nombre, documento, contacto — y un **casillero opcional** con la referencia a su cuenta. El mozo registra al cliente de mostrador (casillero vacío); el adulto mayor sin smartphone opera igual; quien llega por la app nace con el casillero completo. Una persona tiene 0..N carpetas: una por negocio donde realmente es cliente.
+4. **El vínculo cuenta↔carpeta nace del uso o del reclamo.** Primer pedido o reserva por la app → carpeta nueva ya vinculada. Carpeta previa creada por el staff → al registrarse, el sistema la encuentra y la vincula **con prueba y aceptación del usuario** (§7.9): con el email verificado alcanza (el vínculo se ofrece en el momento); por coincidencia de documento, solo con prueba fuerte.
+
+| Sombrero | Tabla de vínculo | Qué define | Superficie |
+|---|---|---|---|
+| Usuario final | `COMPANY_CUSTOMERS` (carpeta con cuenta vinculada) | Qué consume: sus turnos, pedidos, puntos — solo lo propio | App de clientes |
+| Staff | `USER_ROLES` (`usuario + rol + sucursal`) | Qué opera y dónde | Back-office |
+| Superadmin | `SUPERADMINS` | Vista global del sistema | Panel superadmin |
+
+Una misma cuenta puede llevar los tres sombreros a la vez; cada superficie consulta su propia tabla de vínculo.
+
+**Privacidad entre negocios.** Cada negocio ve solo sus propias carpetas y sus propios datos operativos; los vínculos del usuario con otros negocios son invisibles para terceros. El usuario, en cambio, ve todo lo suyo de todos sus negocios desde su cuenta. Importa en gastronomía; es crítico en salud.
+
+> 💡 **Ejemplo práctico — el dueño con tres sombreros**
+> El dueño de un grupo de clínicas dentales franquicia su software: cada franquiciado es una empresa (tenant) del sistema. Esa persona tiene **una sola cuenta** con tres filas: en `SUPERADMINS` (comercializa el software y administra los tenants, §10), en `USER_ROLES` como Owner/admin de su propia empresa, y una carpeta vinculada en `COMPANY_CUSTOMERS` — porque también se atiende como paciente y saca turnos desde la app. El panel superadmin, el back-office y la app de pacientes le muestran cada uno su mundo, sin mezclarse.
 
 ---
 
@@ -257,6 +287,9 @@ erDiagram
     COMPANIES ||--o{ OWNERSHIP_TRANSFERS : "transfiere ownership"
     USERS ||--o{ OWNERSHIP_TRANSFERS : "ofrece (saliente)"
     USERS ||--o{ OWNERSHIP_TRANSFERS : "recibe la oferta"
+    COMPANIES ||--o{ COMPANY_CUSTOMERS : "tiene clientes"
+    USERS |o--o{ COMPANY_CUSTOMERS : "vincula su cuenta (opcional)"
+    USER_ROLES |o--o{ COMPANY_CUSTOMERS : "registra (staff)"
     USERS ||--o| SUPERADMINS : "puede ser"
     SUPERADMINS ||--o{ SYSTEM_SETTINGS : "actualiza"
 
@@ -335,6 +368,20 @@ erDiagram
         timestamptz expires_at
         timestamptz created_at
     }
+    COMPANY_CUSTOMERS {
+        uuid company_customer_id PK
+        uuid company_id FK
+        uuid user_id FK "USERS - nullable: vacio si no tiene cuenta"
+        citext first_name
+        citext last_name
+        varchar document_type "nullable - ej DNI"
+        varchar document_number "nullable"
+        citext customer_email "nullable"
+        varchar customer_phone "nullable"
+        uuid created_by FK "USER_ROLES - nullable si se autoregistro"
+        boolean is_active
+        timestamptz created_at
+    }
     SUPERADMINS {
         uuid superadmin_id PK
         uuid user_id FK "única - un user es o no superadmin"
@@ -353,7 +400,7 @@ erDiagram
 
 ### 6.1 Notas por entidad
 
-**`USERS`** — Identidad global. Una fila por persona, vinculada al sistema de autenticación (en Supabase, referencia a `auth.users`). No contiene información de empresa: la pertenencia se expresa solo a través de `USER_ROLES`. El email es único y case-insensitive (`CITEXT`).
+**`USERS`** — Identidad global. Una fila por persona, vinculada al sistema de autenticación (en Supabase, referencia a `auth.users`). No contiene información de empresa: la pertenencia como staff se expresa a través de `USER_ROLES`; el vínculo como cliente, a través de `COMPANY_CUSTOMERS` (§4.2). El email es único y case-insensitive (`CITEXT`).
 
 **`COMPANIES`** — El tenant. `owner_id` marca al dueño único (ver §5.2). Todas las tablas operativas de cada sistema (productos, ventas, etc.) llevan `company_id` (BR-11, ver §9.3), porque es la columna sobre la que pivota el RLS.
 
@@ -367,11 +414,13 @@ erDiagram
 
 > **¿Por qué una tabla puente y no columnas booleanas en `ROLES`?** La relación rol ↔ permiso es muchos-a-muchos: un rol tiene N permisos y un mismo permiso está en N roles. Modelarlo como columnas (`order_c`, `order_u`, `menu_d`, …) implica que agregar un permiso nuevo requiere un `ALTER TABLE` + migración + tocar la UI, que la tabla `ROLES` sea estructuralmente distinta en cada proyecto (se rompe el estándar) y que la verificación de permisos no pueda ser una función genérica reutilizable. Con la tabla puente, agregar un permiso es un INSERT en el catálogo (la UI de roles lo muestra sola), las tablas son **idénticas en todos los proyectos** (solo cambia el contenido del catálogo) y `fn_has_permission('orders.create')` sirve igual en todos los sistemas. El costo de los joins se absorbe materializando los permisos del rol activo en los claims del JWT al armar el contexto activo (§8): se calculan al establecer o cambiar el contexto, no en cada query.
 
-**`USER_ROLES`** — El corazón del modelo. Combinación única de `user_id + role_id + branch_id`. Regla de integridad crítica: **la sucursal y el rol deben pertenecer a la misma empresa** (se validará con trigger/función en la v2). Es también la tabla que otras tablas referencian en campos de auditoría como `created_by` (según la convención de nombres, apuntando a `user_role_id`, lo que registra no solo *quién* sino *con qué rol y en qué sucursal* hizo la acción).
+**`USER_ROLES`** — El corazón del modelo. Combinación única de `user_id + role_id + branch_id`. Regla de integridad crítica: **la sucursal y el rol deben pertenecer a la misma empresa** (se validará con trigger/función en la v2). Es también la tabla que otras tablas referencian en campos de auditoría como `created_by` (según la convención de nombres, apuntando a `user_role_id`, lo que registra no solo *quién* sino *con qué rol y en qué sucursal* hizo la acción). Esto aplica a las acciones del staff: las filas creadas por usuarios finales registran su autoría contra la carpeta de cliente (BR-14, §4.2).
 
-**`INVITATIONS`** — Registro completo del flujo de invitación (ver §7.4). Guarda el rol y la sucursal propuestos, los datos precargados de la persona y el estado del ciclo de vida.
+**`INVITATIONS`** — Registro completo del flujo de invitación (ver §7.4). Guarda el rol y la sucursal propuestos, los datos precargados de la persona y el estado del ciclo de vida. Conserva **todas** las invitaciones históricas, en cualquier estado — no solo las pendientes; el paso a paso de cada una (reenvíos, transiciones) vive en el log de auditoría (decisiones 17 y 25).
 
 **`OWNERSHIP_TRANSFERS`** — Registro del flujo de transferencia de ownership (§7.8): la oferta del Owner saliente al receptor, con el mismo ciclo de vida que una invitación. Solo puede existir una pendiente por empresa (BR-17).
+
+**`COMPANY_CUSTOMERS`** — La carpeta del cliente en cada negocio (§4.2): una fila por persona por empresa, exista o no su cuenta en la app. `user_id` es el casillero opcional de la cuenta (única por `empresa + cuenta` cuando está completo) y su vinculación exige prueba (§7.9, BR-18); `created_by` registra qué staff la creó (vacío si la persona se autoregistró por la app). Las tablas de dominio de cada sistema (historias clínicas, puntos de fidelización) la referencian — mismo patrón núcleo estándar + extensión específica del *initial setup*.
 
 **`SUPERADMINS`** — Lista blanca de usuarios con acceso global (ver §10). Deliberadamente fuera del modelo de roles de empresa.
 
@@ -384,13 +433,13 @@ erDiagram
 
 ## 7. Flujos de incorporación de usuarios
 
-Toda persona entra al sistema por **uno de tres caminos**: se registra por cuenta propia (y crea su propia empresa), o es invitada a una empresa existente — con o sin cuenta previa. Los tres caminos comparten los mismos bloques (verificación de email, creación de cuenta, creación de asignación), por eso se documentan juntos: primero la visión global y los bloques comunes, después cada camino en detalle.
+Todo miembro del **staff** entra al sistema por **uno de tres caminos**: se registra por cuenta propia (y crea su propia empresa), o es invitado a una empresa existente — con o sin cuenta previa. Los tres comparten los mismos bloques (verificación de email, creación de cuenta, creación de asignación), por eso se documentan juntos: primero la visión global y los bloques comunes, después cada camino en detalle. El **usuario final** (§4.2) tiene su propio camino de entrada — el **D** (§7.9) —, el más simple: crea solo la cuenta, sin empresa ni roles.
 
-### 7.1 Visión global: los tres caminos de entrada
+### 7.1 Visión global: los caminos de entrada del staff
 
 ```mermaid
 flowchart TD
-    START["👤 Persona que va a usar el sistema"] --> Q{"¿Cómo llega?"}
+    START["👤 Miembro del staff que va a usar el sistema"] --> Q{"¿Cómo llega?"}
     Q -- "Se registra por<br/>cuenta propia" --> A0["Camino A<br/>Crea su propia empresa"]
     Q -- "Invitada, SIN<br/>cuenta previa" --> B0["Camino B<br/>Se registra y entra a<br/>una empresa existente"]
     Q -- "Invitada, CON<br/>cuenta existente" --> C0["Camino C<br/>Acepta y entra a<br/>una empresa existente"]
@@ -412,19 +461,20 @@ El diagrama muestra el **happy path** de cada flujo. Las variantes — cuenta ya
 
 Qué bloques usa cada camino:
 
-| Bloque | Camino A — Registro propio | Camino B — Invitación (sin cuenta) | Camino C — Invitación (con cuenta) |
-|---|---|---|---|
-| Invitación previa (§7.4) | — | ✔ | ✔ |
-| Verificación de email por OTP (§7.2) | ✔ | ✔ | — (ya verificó su email al crear su cuenta) |
-| Creación de cuenta (datos + contraseña) | ✔ (se omite si ya tenía cuenta, §7.3) | ✔ (datos precargados por el invitador) | — |
-| *Initial setup* (§7.3) | ✔ | — | — |
-| Creación de asignación (`USER_ROLES`) | ✔ (rol `admin`, y la persona queda como **Owner** de la empresa) | ✔ (rol de la invitación) | ✔ (rol de la invitación) |
+| Bloque | Camino A — Registro propio | Camino B — Invitación (sin cuenta) | Camino C — Invitación (con cuenta) | Camino D — Usuario final (§7.9) |
+|---|---|---|---|---|
+| Invitación previa (§7.4) | — | ✔ | ✔ | — |
+| Verificación de email por OTP (§7.2) | ✔ | ✔ | — (ya verificó su email al crear su cuenta) | ✔ |
+| Creación de cuenta (datos + contraseña) | ✔ (se omite si ya tenía cuenta, §7.3) | ✔ (datos precargados por el invitador) | — | ✔ (se omite si ya tenía cuenta, §7.9) |
+| *Initial setup* (§7.3) | ✔ | — | — | — |
+| Creación de asignación (`USER_ROLES`) | ✔ (rol `admin`, y la persona queda como **Owner** de la empresa) | ✔ (rol de la invitación) | ✔ (rol de la invitación) | — (no tiene roles, §4.2) |
+| Vinculación de carpetas de cliente (§7.9) | — | — | — | ✔ (por email verificado o documento) |
 
-La clave para entender los tres caminos: **el camino A es el único que crea una empresa**; B y C entran a una existente. Y el camino B es, en esencia, "el camino A sin *initial setup* y con los datos precargados por quien invitó".
+La clave para entender los caminos del staff: **el camino A es el único que crea una empresa**; B y C entran a una existente. Y el camino B es, en esencia, "el camino A sin *initial setup* y con los datos precargados por quien invitó". El camino D no toca empresas: crea solo la cuenta del usuario final (§7.9).
 
 ### 7.2 Bloque común: verificación de email por OTP
 
-En los caminos A y B, antes de crear la cuenta, el sistema envía un **OTP** (*One-Time Password*, contraseña de un solo uso): un código numérico de **6 dígitos** que llega al email ingresado y que la persona debe tipear en la pantalla de registro.
+En los caminos A, B y D, antes de crear la cuenta, el sistema envía un **OTP** (*One-Time Password*, contraseña de un solo uso): un código numérico de **6 dígitos** que llega al email ingresado y que la persona debe tipear en la pantalla de registro.
 
 Para evitar confusiones, conviene ser explícito sobre qué es y qué no es:
 
@@ -437,7 +487,7 @@ Reglas del bloque:
 
 - El código tiene **vencimiento corto** y puede reenviarse (cada reenvío invalida el anterior, con una espera mínima entre reenvíos — ver §8.2).
 - Los **intentos son limitados** (protección contra fuerza bruta y contra enumeración de cuentas; los límites concretos, en §8.2).
-- Es **exactamente el mismo bloque** en los caminos A y B; en el camino B se agrega una validación extra: el email verificado debe **coincidir con el email de la invitación** (ver §7.6).
+- Es **exactamente el mismo bloque** en los caminos A, B y D; en el camino B se agrega una validación extra: el email verificado debe **coincidir con el email de la invitación** (ver §7.6).
 - El camino C no lo necesita: ese usuario ya verificó su email cuando creó su cuenta.
 
 ### 7.3 Camino A — Registro por cuenta propia e *initial setup*
@@ -549,6 +599,7 @@ Reglas:
 - **Unicidad:** solo puede existir **una invitación pendiente por email + empresa**. Si se quiere cambiar el rol o la sucursal antes de que la acepte, se revoca y se crea una nueva.
 - **Validaciones al crear:** no se puede invitar a un email que ya tiene asignación activa en esa misma sucursal con ese mismo rol; y el rol y la sucursal de la invitación deben pertenecer a la empresa del invitador.
 - **Validaciones al aceptar:** si entre el envío y la aceptación el rol o la sucursal fueron desactivados, la invitación se considera inválida y se informa a la persona (y al invitador) para que se genere una nueva.
+- **Auditoría:** la fila de `INVITATIONS` refleja el estado actual; cada evento del ciclo —creación, reenvío, aceptación, rechazo, revocación— queda registrado en el log de auditoría con quién y cuándo (decisiones 17 y 25).
 
 > 💡 **Ejemplo práctico — invitación con typo**
 > El admin invita a `jaun@gmail.com` en lugar de `juan@gmail.com`. Se da cuenta al día siguiente: revoca la invitación pendiente y crea una nueva con el email correcto. Si el dueño real de `jaun@gmail.com` intentara usar el link viejo, vería "invitación revocada" y no podría acceder a nada.
@@ -639,6 +690,42 @@ Reglas (BR-17):
 > 💡 **Ejemplo práctico — la venta de la pizzería**
 > Carlos vende Pizzería Don Carlo a su socio Diego. Desde la configuración inicia la transferencia; Diego recibe el aviso y la acepta: ahora Diego es Owner (ya era admin, así que sus roles no cambian) y Carlos sigue siendo admin — útil durante la transición. Tres meses después Carlos renuncia a su rol admin y queda fuera de la empresa: ahora que no es Owner, BR-03 ya no lo protege ni lo retiene. Si en cambio Diego hubiera dejado pasar los 7 días sin responder, la transferencia expiraba y Carlos seguía siendo el dueño — el título nunca queda en el aire.
 
+### 7.9 Camino D — Registro del usuario final
+
+El camino de entrada de los usuarios finales (§4.2). Es el más simple de los cuatro: crea **solo la cuenta** — sin empresa, sin roles, sin *initial setup* — y resuelve la vinculación con las carpetas de cliente que ya existieran a nombre de la persona.
+
+```mermaid
+flowchart TD
+    A["Persona entra al registro<br/>de la app de clientes"] --> B["Ingresa su email"]
+    B --> C["📧 Verificación por OTP (§7.2)"]
+    C --> K{"¿El email ya<br/>tiene cuenta?"}
+    K -- "Sí" --> L["Inicia sesión con su contraseña:<br/>misma cuenta, otro sombrero (§4.2)"]
+    K -- "No" --> D["Completa datos personales<br/>y crea su contraseña"]
+    D --> E["✅ Cuenta creada (USERS):<br/>sin empresa, sin roles, sin vínculos"]
+    E --> F{"Resolución post-OTP:<br/>¿hay carpetas de cliente<br/>con este email?"}
+    L --> F
+    F -- "Sí" --> G["Ofrece vincularlas: el email<br/>verificado es prueba suficiente"]
+    F -- "No" --> H["Cuenta libre: explora el catálogo<br/>público o empieza a consumir"]
+    G --> H
+    H -.->|"Opcional"| I["Buscar carpetas<br/>por documento (DNI)"]
+    I -.-> J["Coincidencia → vínculo PENDIENTE<br/>de prueba fuerte: confirmación del<br/>personal o código al contacto<br/>ya registrado en la carpeta"]
+```
+
+Reglas (BR-18):
+
+- **La cuenta nace libre.** Cero vínculos es un estado válido y permanente: el usuario puede explorar el catálogo público sin ser cliente de nadie.
+- **Si el email ya tiene cuenta, no se duplica nada** (BR-09): la persona inicia sesión dentro del mismo flujo —la misma resolución post-OTP del camino A (§7.3)— y sigue directo a la vinculación de carpetas. Es el caso del staff que se descarga la app de clientes: una cuenta, otro sombrero (§4.2).
+- **Vinculación por email verificado → inmediata.** Si una carpeta ya tenía ese email, el OTP del registro demuestra la propiedad de la casilla y el vínculo se ofrece en el momento — la misma lógica de resolución post-OTP del camino A (§7.3).
+- **La coincidencia por documento nunca vincula sola.** El documento no es un secreto: cualquiera puede conocer el DNI de otra persona. La coincidencia encuentra la carpeta pero **no muestra sus datos ni la vincula**; a lo sumo revela lo imprescindible para elegir la prueba — el contacto **enmascarado** al que viajará el código —, el mismo criterio de los flujos de recuperación de cuenta de la industria. El vínculo queda pendiente de una **prueba fuerte**: confirmación del personal en la próxima visita (con la persona y su documento enfrente) o un código enviado al teléfono/email que la carpeta ya tenía registrado; en los sistemas que exigen solo la prueba presencial, la respuesta puede ser totalmente genérica. Misma filosofía que la decisión 13: los datos aparecen solo ante una prueba real de identidad.
+- **Qué prueba exige cada sistema es parametrizable** (ficha de §10.2): gastronomía puede aceptar el código por teléfono (el riesgo son puntos de fidelización); salud exige confirmación presencial (el riesgo es la historia clínica).
+- **Los consumos nuevos por la app** crean la carpeta ya vinculada: el vínculo nace del uso, sin paso extra.
+- **Todo evento de vinculación** (propuesta, confirmación, rechazo) queda en el log de auditoría (decisión 17).
+- **Carpetas duplicadas** (la misma persona cargada dos veces por el staff): se resuelven con una herramienta de **fusión** del negocio; su detalle se define en la v2.
+- **El mismo email puede después ser invitado como staff** (caminos B/C): es la misma cuenta con otro sombrero (§4.2); nada se duplica.
+
+> 💡 **Ejemplo práctico — los puntos del mostrador**
+> María almuerza en La Parrilla del Puerto. No tiene la app, pero quiere los puntos: el mozo la registra en dos toques — nombre, DNI y teléfono (el mozo no conoce la lógica interna; para él es solo "registrar cliente"). Seis meses y varios almuerzos después, María se descarga la app y se registra con su email — que la carpeta no tenía. El sistema no encuentra nada por email, así que María busca por DNI: *"Encontramos registros a tu nombre: confirmá el vínculo en tu próxima visita, o pedí un código al teléfono terminado en 21"*. María pide el código, tipea el SMS que llega al teléfono que el mozo había cargado, y sus puntos acumulados aparecen en la app. Un desconocido que tipeara el DNI de María vería la misma pantalla genérica — pero si pidiera el código, viaja al teléfono de María, no al suyo: sin ese teléfono en la mano no hay vínculo, ni puntos a la vista, ni forma de saber en qué negocios tiene carpetas. Y los intentos están limitados, como todo en §8.2.
+
 ---
 
 ## 8. Contexto activo: en qué empresa, sucursal y rol estoy parado
@@ -675,12 +762,12 @@ Reglas:
 
 ### 8.1 Política de sesiones y renovación de tokens
 
-El JWT corto y la sesión larga son **dos cosas distintas que se resuelven con mecanismos distintos**. El error histórico (heredado de la época de FlutterFlow, cuya autenticación custom cerraba la sesión al vencer el token sin dar ventana de refresh) era estirar la vida del JWT a 7 días para que la sesión durara. En Flutter nativo eso no es necesario: el SDK oficial (`supabase_flutter`) renueva el token automáticamente, y la duración de la sesión la gobiernan los **refresh tokens**.
+El JWT corto y la sesión larga son **dos cosas distintas que se resuelven con mecanismos distintos**. El error histórico (heredado de la época de FlutterFlow, cuya autenticación custom cerraba la sesión al vencer el token sin dar ventana de refresh) era estirar la vida del JWT a 7 días para que la sesión durara. Con los SDKs oficiales de Supabase eso no es necesario (en Flutter, `supabase_flutter`; en web, `supabase-js`): el SDK renueva el token automáticamente, y la duración de la sesión la gobiernan los **refresh tokens**.
 
 | Parámetro | Valor estándar | Dónde se configura |
 |---|---|---|
 | Vida del JWT (access token) | **3600 s (1 hora)** — el default de Supabase. Sistemas sensibles pueden bajarlo (hasta 15–30 min); nunca menos de 5 min. **Nunca se sube para alargar sesiones.** | Configuración del proyecto Supabase |
-| Renovación del JWT | **Automática** (`autoRefreshToken`, activo por defecto): el SDK chequea la sesión cada 10 s y refresca ~30 s antes del vencimiento; al reabrir la app recupera la sesión aunque el JWT haya vencido; reintenta ante fallas de red sin cerrar la sesión. | SDK `supabase_flutter` (sin código propio) |
+| Renovación del JWT | **Automática** (`autoRefreshToken`, activo por defecto): el SDK chequea la sesión cada 10 s y refresca ~30 s antes del vencimiento; al reabrir la app recupera la sesión aunque el JWT haya vencido; reintenta ante fallas de red sin cerrar la sesión. | SDK oficial de Supabase de cada plataforma (sin código propio) |
 | Vida de la sesión | **Indefinida mientras la app se use**: los refresh tokens no vencen por tiempo, son de un solo uso y rotan en cada canje. | Automático (Supabase + SDK) |
 | Tope de sesión (opcional, por proyecto) | *Inactivity timeout* o *time-boxed sessions* (ej: "14 días sin uso → re-login"). Es configuración del proyecto, **no lógica de la app**. ⚠️ Requiere plan Pro o superior de Supabase (decisión 20, §13.1). | Configuración Supabase (Auth) |
 | Cambio de contexto activo | `refreshSession()`: reemite el JWT al instante con los claims del nuevo contexto. | App, al cambiar de contexto |
@@ -708,7 +795,7 @@ Los endpoints públicos (registro con OTP, login, invitaciones) son la puerta de
 | Verificación del código OTP | **Máx. 5 intentos por código** (regla de aplicación); además Supabase corta a las 360 verificaciones por hora desde una misma IP | Las veces que se tipea un código. Uno de 6 dígitos tiene un millón de combinaciones: sin tope de intentos, un bot lo adivina probando; con 5, el código se invalida y hay que pedir uno nuevo — cuya emisión también está limitada (fila anterior). Los dos contadores son independientes porque protegen de ataques distintos: spam/costo de envío vs. adivinación del código. |
 | Renovación de tokens | **Máx. 1800 renovaciones por hora desde una misma IP** (default de Supabase) | Los canjes de refresh token (§8.1). El SDK renueva ~1 vez por hora por sesión: el límite no afecta el uso real ni siquiera de una oficina entera detrás de la misma IP. |
 
-**Capa 2 — CAPTCHA en registro y login.** Supabase trae integración nativa con **Cloudflare Turnstile**, el proveedor estándar de Eurekant: gratuito y, en la gran mayoría de los casos, invisible — verifica que hay una persona sin pedirle nada (sin "marcá los semáforos"). Se activa desde el panel de Supabase y `supabase_flutter` lo soporta con el parámetro `captchaToken` en el registro y el login. Es la capa que detiene a los bots puros antes de que consuman intentos, y la capa confiable para el login con contraseña (existe un [reporte abierto](https://github.com/supabase/supabase/issues/41947) de que el límite configurable de logins no siempre se aplica).
+**Capa 2 — CAPTCHA en registro y login.** Supabase trae integración nativa con **Cloudflare Turnstile**, el proveedor estándar de Eurekant: gratuito y, en la gran mayoría de los casos, invisible — verifica que hay una persona sin pedirle nada (sin "marcá los semáforos"). Se activa desde el panel de Supabase y los SDKs oficiales lo soportan con el parámetro `captchaToken` en el registro y el login (en Flutter, `supabase_flutter`). Es la capa que detiene a los bots puros antes de que consuman intentos, y la capa confiable para el login con contraseña (existe un [reporte abierto](https://github.com/supabase/supabase/issues/41947) de que el límite configurable de logins no siempre se aplica).
 
 **Capa 3 — Reglas de aplicación para invitaciones.** El riesgo acá no es el robo de datos sino el **spam saliente**: un usuario malicioso que envía cientos de invitaciones arruina la reputación del dominio de email — los proveedores empiezan a marcar como spam todo lo que el sistema manda, incluido lo legítimo. Estándar: tope duro de invitaciones por emisor por día, definido como parámetro del sistema (ej: `invitations.max_per_user_per_day`, default 50, ajustable por empresa vía override si un cliente lo necesita — §10.2), y a partir de 10 invitaciones diarias el emisor se marca para revisión (umbral de la práctica documentada de la industria); el emisor siempre tiene email verificado (lo garantiza el flujo de registro); y la apertura de invitaciones se limita igual que la verificación de OTP, porque el token del link es un secreto adivinable.
 
@@ -722,7 +809,7 @@ Los endpoints públicos (registro con OTP, login, invitaciones) son la puerta de
 
 ### 9.1 El principio
 
-**El código de aplicación nunca filtra por empresa o sucursal.** Cuando el frontend o el backend consulta una tabla, escribe la query "ingenua" (`select * from PRODUCTS`) y la base de datos, mediante Row Level Security, devuelve **solo** las filas que el contexto activo del usuario puede ver.
+**El código de aplicación nunca filtra por empresa o sucursal.** Cuando el frontend o el backend consulta una tabla, escribe la query "ingenua" (`select * from PRODUCTS`) y la base de datos, mediante Row Level Security, devuelve **solo** las filas que quien consulta puede ver — según su familia de acceso (§9.2); el ejemplo siguiente muestra la familia staff.
 
 ```mermaid
 flowchart LR
@@ -748,6 +835,7 @@ flowchart LR
 - El RLS cubre los cuatro verbos: lectura (qué filas veo), inserción (no puedo insertar filas de otra empresa — cláusula de verificación), actualización y borrado.
 - Los **permisos** también se evalúan en la base cuando corresponde: por ejemplo, insertar en `PRODUCTS` exige el permiso `products.create` en el contexto activo, no solo pertenecer a la empresa. Habrá funciones auxiliares estándar (`fn_has_permission`, etc.) reutilizables en todos los proyectos.
 - **Alcance empresa vs. sucursal según la tabla:** hay tablas donde todos los miembros de la empresa ven lo mismo (ej: catálogo de productos) y tablas donde solo se ve lo de la propia sucursal (ej: cajas, stock). Cada sistema define el alcance de cada tabla; el estándar provee ambos patrones de política.
+- **Tres familias de política según quién accede:** el **staff** accede por contexto activo + permisos (todo lo descripto arriba); el **usuario final** accede por **identidad propia** — ve y gestiona las filas vinculadas a su carpeta de cliente, sin claims de contexto ni permisos (§4.2); y el **catálogo público** expone los perfiles de las empresas listadas a cualquier usuario autenticado. Cada tabla declara qué familias le aplican; el detalle va en la v2.
 - **Trade-off conocido:** el token es una **foto** de los permisos, tomada al armar el contexto activo. Se gana velocidad (la base no consulta las tablas de roles en cada query) a cambio de inmediatez: un cambio de rol o de permisos no se refleja en los tokens ya emitidos hasta que expiran y se renuevan (hasta 1 hora con el valor estándar, ver §8.1). Por eso los tokens son de **vida corta**, y las acciones críticas (desactivar un usuario, suspender una empresa) se complementan con verificación en base, que aplica al instante. Es la decisión estándar de la industria (Supabase, Auth0, Firebase): la alternativa — verificar todo en base en cada query — elimina esa ventana de minutos al costo del rendimiento de todo el sistema, todo el tiempo. La política completa de duración y renovación de tokens está en §8.1.
 
 > 💡 **Ejemplo práctico — el cajero desvinculado**
@@ -759,7 +847,7 @@ flowchart LR
 
 | Grupo | Ejemplos | ¿Lleva columna de tenant? |
 |---|---|---|
-| Tablas del modelo estándar | `USERS`, `COMPANIES`, `BRANCHES`, `ROLES`, `USER_ROLES`, `INVITATIONS` | Según su rol en el modelo (definido en §6) |
+| Tablas del modelo estándar | `USERS`, `COMPANIES`, `BRANCHES`, `ROLES`, `USER_ROLES`, `INVITATIONS`, `COMPANY_CUSTOMERS` | Según su rol en el modelo (definido en §6) |
 | Catálogos globales | `PERMISSIONS`, `SYSTEM_SETTINGS` | No: son datos del sistema, no de las empresas |
 | **Tablas operativas** | `PRODUCTS`, `ORDERS`, turnos, stock, cajas… | **Sí, siempre** (BR-11): `company_id`, más `branch_id` si su alcance es por sucursal |
 
@@ -784,6 +872,8 @@ flowchart LR
 1. **FKs compuestas.** La tabla padre declara una unicidad que incluye el tenant (ej: `UNIQUE (company_id, order_id)` en `ORDERS`) y la tabla hija referencia con FK compuesta: `FOREIGN KEY (company_id, order_id) REFERENCES ORDERS (company_id, order_id)`. Con esto es **estructuralmente imposible** insertar una fila que mezcle tenants: si el `company_id` de la hija no coincide con el del padre, la FK no matchea y Postgres rechaza la operación.
 2. **La columna nunca la escribe la aplicación.** `company_id` (y `branch_id`) se completan con un `DEFAULT` que lee el contexto activo de los claims del JWT. El código de aplicación no pasa el valor, igual que no filtra por él (principio 2).
 3. **RLS en escritura (`WITH CHECK`).** Aunque alguien intentara forzar el valor, la política de inserción/actualización rechaza cualquier fila cuyo tenant no coincida con el contexto activo del token.
+
+Las tres capas, tal como están descriptas, corresponden a la familia **staff** (contexto activo). En la familia de **identidad propia** (§9.2) el mecanismo es análogo con otra referencia: el usuario final no tiene claims de contexto, así que el tenant de una fila nueva (un pedido, una reserva) sale de la **operación misma** — la empresa de la carpeta o del perfil del catálogo sobre el que está actuando — y el `WITH CHECK` exige que la fila quede atada a una carpeta vinculada a su propia cuenta (BR-18). El detalle de ambas variantes va en la v2.
 
 > 💡 **Ejemplo práctico — el INSERT imposible**
 > Un desarrollador comete el error que más preocupa: estando en el contexto de la Empresa A, arma un renglón de venta que referencia un producto de la Empresa B. Capa 1: la FK compuesta `(company_id, product_id)` no encuentra ese producto en la Empresa A → INSERT rechazado. Y aunque esa FK no existiera, la capa 2 hace que el `company_id` salga del token (no del código), y la capa 3 rechaza cualquier fila que no sea del contexto activo. El error pasa de ser "un bug silencioso que mezcla datos de clientes" a ser **un error de constraint visible en desarrollo**.
@@ -880,10 +970,11 @@ Estas reglas son **obligatorias** en todos los proyectos. Usan el prefijo **BR**
 | BR-11 | Toda tabla operativa lleva `company_id` (y `branch_id` si su alcance es por sucursal), con RLS activo e índices sobre esas columnas. Sin excepciones (análisis y justificación en §9.3). |
 | BR-12 | El catálogo `PERMISSIONS` solo lo modifica el equipo de desarrollo (datos semilla); las empresas no lo editan. |
 | BR-13 | El acceso superadmin se define en políticas explícitas y auditables, nunca como bypass genérico. |
-| BR-14 | Los campos de auditoría (`created_by`, `updated_by`) referencian `USER_ROLES`, no `USERS`, para congelar el contexto (quién, con qué rol, en qué sucursal). |
+| BR-14 | Los campos de auditoría (`created_by`, `updated_by`) referencian `USER_ROLES`, no `USERS`, para congelar el contexto (quién, con qué rol, en qué sucursal). Aplica a las acciones del staff; en las filas originadas por usuarios finales —que no tienen asignaciones (BR-18)— la autoría se registra contra su carpeta de cliente (`COMPANY_CUSTOMERS`). |
 | BR-15 | Un usuario puede tener varios roles en la misma sucursal, pero los permisos **nunca se combinan**: se opera bajo un único rol a la vez — el contexto activo incluye el rol (ver §8). |
-| BR-16 | **Prevención de inconsistencia de tenant:** las relaciones entre tablas operativas usan FKs compuestas que incluyen el tenant; `company_id`/`branch_id` nunca los escribe la aplicación (se completan por defecto desde los claims del contexto activo); y toda política RLS de inserción/actualización incluye `WITH CHECK` contra el contexto activo (ver §9.3). |
+| BR-16 | **Prevención de inconsistencia de tenant:** las relaciones entre tablas operativas usan FKs compuestas que incluyen el tenant; `company_id`/`branch_id` nunca los escribe la aplicación; y toda política RLS de inserción/actualización incluye `WITH CHECK`. En la familia staff, el tenant se completa por defecto desde los claims del contexto activo y el `WITH CHECK` valida contra esos claims; en las escrituras de usuarios finales (identidad propia, §9.2) el tenant sale de la operación misma —la empresa de la carpeta o del perfil del catálogo sobre el que actúan— y el `WITH CHECK` valida que la fila quede atada a una carpeta vinculada a su cuenta (BR-18). Ver §9.3. |
 | BR-17 | **Transferencia de ownership con confirmación:** requiere la aceptación explícita del receptor, que debe ser un usuario activo de la empresa (al aceptar recibe el rol admin si no lo tenía). Solo puede existir una transferencia pendiente por empresa; es revocable mientras esté pendiente y expira (parametrizable, default 7 días; una expirada no se reenvía — se inicia una nueva). El Owner saliente conserva el rol admin. La aceptación es una transacción única (§7.8). |
+| BR-18 | **El usuario final no es un rol:** no tiene filas en `ROLES`/`USER_ROLES` ni permisos del catálogo; su relación con cada negocio es una carpeta de cliente (`COMPANY_CUSTOMERS`, única por `empresa + cuenta` cuando hay cuenta vinculada) y su acceso a datos es de identidad propia. La vinculación de una carpeta a una cuenta exige prueba y aceptación del usuario: el email verificado basta como prueba (el vínculo se ofrece en el momento); la coincidencia por documento exige además una prueba fuerte parametrizable y nunca vincula por sí sola ni revela los datos de la carpeta — solo el contacto enmascarado necesario para la prueba (§4.2, §7.9). |
 
 ---
 
@@ -912,6 +1003,10 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 | Bot intenta adivinar códigos OTP o tokens de invitación | Fuerza bruta sobre secretos cortos | Máx. 5 intentos por código (luego se invalida), límites por IP y CAPTCHA (§8.2). |
 | Usuario malicioso envía invitaciones en masa | Spam saliente que arruina la reputación del dominio de email | Tope duro diario por emisor (parámetro del sistema, default 50) y revisión a partir de 10 diarias; el emisor siempre tiene email verificado (§8.2). |
 | Atacante acumula intentos fallidos sobre el email de su víctima | Bloqueo de la cuenta ajena como ataque (DoS dirigido) | No existe el bloqueo permanente de cuentas: esperas crecientes, CAPTCHA y bloqueos temporales; la recuperación de contraseña sigue disponible (§8.2). |
+| Alguien intenta reclamar la carpeta de cliente de otra persona conociendo su DNI | Apropiación de datos ajenos (historia clínica, puntos) | La coincidencia por documento no vincula ni revela los datos de la carpeta: exige prueba fuerte — confirmación del personal o código al contacto ya registrado en la carpeta (§7.9, BR-18). |
+| Cliente de mostrador sin cuenta (adulto mayor, menor, sin smartphone) | El negocio no podría operar con personas sin app | La carpeta existe sin cuenta (`user_id` vacío): el negocio opera normalmente; la cuenta puede vincularse después (§4.2). |
+| La misma persona cargada dos veces por el staff | Carpetas de cliente duplicadas con los datos repartidos | Fusión de carpetas como herramienta del negocio — detalle a definir en la v2 (§7.9). |
+| Un negocio quiere saber qué consume su cliente en otros negocios | Fuga de privacidad entre tenants | Cada negocio ve solo sus propias carpetas y datos; los vínculos del usuario con otros negocios son invisibles para terceros (§4.2). |
 
 ---
 
@@ -946,6 +1041,9 @@ Todas las decisiones fueron validadas con Franco Cruz en la fecha indicada.
 | 21 | **Un estándar, dos documentos** | Este conceptual, para todas las audiencias, y un documento técnico (v2) solo para desarrollo, que cita las reglas de acá —nunca las re-explica—, mapea cada BR y decisión a los objetos que la implementan y declara qué versión conceptual implementa. | 10/06/2026 | §1.1 |
 | 22 | **Cambios de parámetros con motivo obligatorio; doble aprobación opcional** | Todo cambio de un parámetro u override registra quién, cuándo, valor anterior, valor nuevo y un comentario obligatorio con el motivo. Los parámetros críticos pueden exigir la confirmación de un segundo superadmin (bandera de la ficha, apagada por defecto). | 11/06/2026 | §10.2 |
 | 23 | **Nomenclatura BR para las reglas de negocio** | Prefijo BR (*Business Rule*), la misma convención de los SRS de Eurekant; renombradas desde RN-XX sin cambio de numeración ni contenido (el historial conserva las menciones históricas). | 11/06/2026 | §11 |
+| 24 | **Agnóstico del cliente, fijo en Supabase** | El estándar define la capa de datos y los flujos sobre Supabase/Postgres; cualquier lenguaje o framework de cliente consume el mismo modelo vía los SDKs oficiales de Supabase. Las menciones a Flutter son ilustrativas (plataforma principal actual). | 12/06/2026 | §1 |
+| 25 | **Invitaciones: estado en la tabla, eventos en el log** | `INVITATIONS` conserva su nombre y una fila por invitación (cualquier estado, para siempre); el paso a paso —reenvíos y transiciones, con quién y cuándo— se registra en el log de auditoría. Sin tabla de historial propia ni mecanismo de fila-por-oferta (eso queda para las transferencias, §7.8 y BR-17). | 12/06/2026 | §6.1, §7.5 |
+| 26 | **Usuarios finales: cuenta libre + carpeta por negocio** | La cuenta global nace sin vínculos (camino D); el catálogo público permite explorar sin relación previa; `COMPANY_CUSTOMERS` es la carpeta estándar del cliente en cada negocio, con o sin cuenta vinculada; la vinculación se ofrece con el email verificado como prueba suficiente, o queda pendiente de prueba fuerte parametrizable si la coincidencia es por documento. El usuario final no es un rol, y la autoría de sus filas se registra contra su carpeta, no contra `USER_ROLES` (BR-14). | 12/06/2026 | §4.2, §7.9, BR-18 |
 
 ### 13.2 Preguntas abiertas (a definir antes de la v2)
 
@@ -967,8 +1065,8 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 
 ## 15. Próximos pasos
 
-1. Validar este documento con el equipo (especialmente las decisiones 15 a 23 de §13.1).
-2. **v2 — documento técnico separado (decisión 21, §1.1):** DDL completo en SQL — tablas, constraints, índices, funciones (`fn_initial_setup`, `fn_has_permission`, `fn_get_setting`), triggers de integridad (BR-03, BR-04, BR-17), FKs compuestas y defaults desde claims con `WITH CHECK` (BR-16), políticas RLS, la entidad de auditoría (decisión 17), el catálogo de parámetros con sus overrides (decisión 16) y la configuración de rate limiting y CAPTCHA (§8.2), todo según la Naming Convention Guide. Incluye la tabla de trazabilidad (cada BR y decisión → los objetos que la implementan) y declara qué versión de este documento implementa.
+1. Validar este documento con el equipo (especialmente las decisiones 15 a 26 de §13.1).
+2. **v2 — documento técnico separado (decisión 21, §1.1):** DDL completo en SQL — tablas, constraints, índices, funciones (`fn_initial_setup`, `fn_has_permission`, `fn_get_setting`), triggers de integridad (BR-03, BR-04, BR-17), FKs compuestas y defaults desde claims con `WITH CHECK` (BR-16), políticas RLS de las tres familias (staff, identidad propia y catálogo público, §9.2), la entidad de auditoría (decisión 17), el catálogo de parámetros con sus overrides (decisión 16), la configuración de rate limiting y CAPTCHA (§8.2), y `COMPANY_CUSTOMERS` con el flujo de vinculación y la fusión de carpetas duplicadas (decisión 26, BR-18), todo según la Naming Convention Guide. Incluye la tabla de trazabilidad (cada BR y decisión → los objetos que la implementan) y declara qué versión de este documento implementa.
 3. **v3:** kit reutilizable (migraciones base + seeds del catálogo de permisos) para iniciar cualquier proyecto nuevo de Eurekant con este cimiento ya instalado.
 
 ---
@@ -986,6 +1084,7 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 | 1.5.0 | 10/06/2026 | Explicación de cómo funciona la firma del JWT (§8, analogía del cheque); requisito de UI de transparencia en el registro y justificación del criterio anti-enumeración estricto frente al aviso inmediato de la industria (§7.3, decisión 13); nueva §8.1 "Política de sesiones y renovación de tokens" tras investigación de mercado: JWT de 1 hora renovado automáticamente por el SDK, sesión larga por refresh tokens rotativos con *reuse detection*, tope opcional por inactividad/time-box (plan Pro), limpieza automática del schema `auth` y retiro de la librería de FlutterFlow (decisión 14); glosario: refresh token; preguntas abiertas nuevas: rate limiting y tope de sesión en plan Free. |
 | 1.6.0 | 10/06/2026 | Resolución de las seis preguntas abiertas de §13.2 (decisiones 15 a 20): transferencia de ownership con confirmación del receptor (nueva §7.8, RN-17 y entidad `OWNERSHIP_TRANSFERS`); catálogo de parámetros con metadatos y cascada de overrides global → empresa → sucursal (§10.2 ampliada con función única de lectura); auditoría formal como entidad estándar de la v2; invitaciones masivas fuera del estándar de datos; nueva §8.2 "Rate limiting y anti-automatización" con investigación de mercado (límites nativos de Supabase con unidades explícitas, SMTP propio obligatorio, CAPTCHA Turnstile, topes para invitaciones, sin bloqueo permanente de cuentas); tope de sesión server-side → plan Pro. Separación formal del estándar en dos documentos —conceptual y técnico— con la justificación en la nueva §1.1 (decisión 21). Glosario: rate limiting, CAPTCHA, override. Cuatro casos borde nuevos. |
 | 1.7.0 | 11/06/2026 | Renombre de las reglas de negocio RN-XX → BR-XX (decisión 23), alineando el documento con la convención de los SRS de Eurekant — numeración y contenido intactos; el historial conserva las menciones históricas a RN. §13.1 convertida a tabla con fecha de validación y referencias por decisión. Auditoría de cambios de parámetros con comentario obligatorio y doble aprobación opcional por ficha (§10.2, decisión 22). Justificación del no-reenvío de transferencias expiradas (§7.8) y referencia cruzada desde el ciclo de vida de invitaciones (§7.5). Glosario: BR. |
+| 1.8.0 | 12/06/2026 | Modelo de **usuarios finales** (decisión 26): nueva §4.2 — cuenta global que nace libre, catálogo público para explorar, carpeta de cliente por negocio con o sin cuenta (`COMPANY_CUSTOMERS`, nueva entidad estándar) y vinculación por uso o reclamo con prueba; nueva BR-18; camino D de registro (§7.9) con coincidencia por documento y prueba fuerte parametrizable; tres familias de política RLS según quién accede (§9.2); cuatro casos borde nuevos (apropiación por DNI, clientes sin cuenta, carpetas duplicadas, privacidad entre negocios). Alcance aclarado: estándar agnóstico del lado del cliente y fijo en Supabase, con las menciones a Flutter como ejemplo (§1, §8.1, §8.2, decisión 24). `INVITATIONS` conserva su nombre y el historial de eventos vive en el log de auditoría (§6.1, §7.5, decisión 25). Glosario: usuario final, carpeta de cliente. |
 
 ---
 
@@ -997,9 +1096,9 @@ Una fila por aprobador de la versión en circulación (los borradores superados 
 
 | Versión | Rol | Nombre | Fecha | Estado |
 |---|---|---|---|---|
-| 1.7.0 | CEO | Franco Cruz | — | Pendiente |
-| 1.7.0 | CTO | — | — | Pendiente |
-| 1.7.0 | Líder técnico | — | — | Pendiente |
+| 1.8.0 | CEO | Franco Cruz | — | Pendiente |
+| 1.8.0 | CTO | — | — | Pendiente |
+| 1.8.0 | Líder técnico | — | — | Pendiente |
 
 ### 17.2 Auditorías y revisiones
 
@@ -1015,3 +1114,4 @@ Registro de cada revisión del documento, haya derivado o no en un cambio de ver
 | 10/06/2026 | Franco Cruz | Sesiones, tokens y anti-enumeración (v1.4.1) | Decisiones adoptadas | Con investigación de mercado (OWASP, productos líderes, docs y código de Supabase/SDK Flutter): se mantiene la anti-enumeración estricta con UI transparente (decisión 13) y se define la política de sesiones estándar (decisión 14). Rate limiting y tope de sesión en plan Free quedan como preguntas abiertas. Origen de la v1.5.0. |
 | 10/06/2026 | Franco Cruz | Preguntas abiertas de §13.2 y estructura del estándar (v1.5.0) | Decisiones adoptadas | Resolución de las seis preguntas abiertas (decisiones 15 a 20; para rate limiting, con investigación de mercado: OWASP, NIST, docs y código de Supabase) y separación del estándar en dos documentos, conceptual y técnico (decisión 21). Origen de la v1.6.0. |
 | 11/06/2026 | Franco Cruz | Transferencias, auditoría de parámetros y nomenclatura (v1.6.0) | Cambios solicitados | 5 puntos: referencia cruzada §7.5 ↔ §7.8, justificación del no-reenvío de transferencias expiradas, comentario obligatorio y doble aprobación opcional en cambios de parámetros, prefijo BR como en los SRS, y §13.1 en formato tabla. Origen de la v1.7.0. |
+| 12/06/2026 | Franco Cruz | Alcance, historial de invitaciones y usuarios finales (v1.7.0) | Decisiones adoptadas | Tres temas: estándar agnóstico del lado del cliente (decisión 24); estado vs. eventos en invitaciones — la tabla conserva su nombre y el log lleva el paso a paso (decisión 25); y modelo completo de usuarios finales, refinado en tres idas y vueltas (cuenta libre, catálogo público, carpeta por negocio con o sin cuenta, vinculación con prueba) — decisión 26 y BR-18. Origen de la v1.8.0. |
