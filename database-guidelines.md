@@ -1,6 +1,6 @@
 # Estandarización de Roles y Permisos — Eurekant LLC
 
-> **Versión:** 1.10.0 (conceptual — sin SQL)
+> **Versión:** 1.11.0 (conceptual — sin SQL)
 > **Fecha:** 13/Jun/26
 > **Estado:** Borrador para validación interna
 > **Alcance:** Todos los proyectos de software desarrollados por Eurekant
@@ -56,6 +56,7 @@
 17. [Aprobaciones y auditorías](#17-aprobaciones-y-auditorías)
     - [17.1 Aprobaciones](#171-aprobaciones)
     - [17.2 Auditorías y revisiones](#172-auditorías-y-revisiones)
+- [Anexo A — Checklist de implementación](#anexo-a--checklist-de-implementación)
 
 ---
 
@@ -131,19 +132,21 @@ Las razones de la separación:
 | **OTP** | *One-Time Password* (contraseña de un solo uso): código de 6 dígitos enviado por email para verificar la propiedad de la casilla durante el registro. (ver [§7.2](#72-bloque-común-verificación-de-email-por-otp)). |
 | **Enumeración de cuentas** | Ataque que consiste en probar emails ajenos en pantallas públicas (registro, invitaciones) para descubrir quién tiene cuenta en el sistema, a partir de diferencias en la respuesta. Se previene respondiendo siempre lo mismo y revelando información solo a quien verificó la casilla (ver [§7.3](#73-camino-a--registro-por-cuenta-propia-e-initial-setup) y [§12](#12-casos-borde-y-puntos-de-fuga-analizados)). |
 | **Initial setup** | Función interna que popula los datos iniciales al crear una empresa (ver [§7.3](#73-camino-a--registro-por-cuenta-propia-e-initial-setup)). |
-| **Soft delete** | «Borrado suave»: en lugar de eliminar un registro, se lo marca como inactivo (`is_active = false`). El dato deja de operar pero queda para el historial y la auditoría (ver principio 6, [BR-06](#11-reglas-de-negocio-e-integridad-resumen-normativo) y [BR-08](#11-reglas-de-negocio-e-integridad-resumen-normativo)). |
+| **Soft delete** | «Borrado suave»: en lugar de eliminar un registro, se le pone una fecha de baja (`deactivated_at`; nulo = activo). El dato deja de operar pero queda para el historial y la auditoría (ver principio 6, [BR-06](#11-reglas-de-negocio-e-integridad-resumen-normativo) y [BR-08](#11-reglas-de-negocio-e-integridad-resumen-normativo)). |
 | **Tabla operativa** | Toda tabla que guarda datos del dominio de negocio de cada sistema (productos, ventas, turnos, stock, cajas, etc.). Se contrapone a las tablas del modelo estándar (`USERS`, `COMPANIES`, `ROLES`, …) y a los catálogos globales sin tenant (`PERMISSIONS`, `SYSTEM_SETTINGS`). Siempre lleva columna de tenant (ver [§9.4](#94-tablas-operativas-y-la-columna-de-tenant-análisis-de-normalización) y [BR-11](#11-reglas-de-negocio-e-integridad-resumen-normativo)). |
 | **RLS (Row Level Security)** | «Seguridad a nivel de fila»: mecanismo de la base de datos (Postgres) que decide qué filas puede ver o escribir cada quien, sin que el código tenga que filtrar. Es la línea central de aislamiento entre empresas (ver [§9](#9-rls-aislamiento-de-datos-sin-filtros-en-el-código)). |
 | **Dato semilla (seed)** | Datos que el propio sistema carga al instalarse o desplegarse —no los crea ningún usuario—, como el catálogo de permisos (ver [§5.1](#51-cómo-se-compone-el-acceso) y [§6.1](#61-notas-por-entidad)). |
 | **UUID** | Identificador único universal: una tira larga e irrepetible (ej: `a3f1c2…`) que nombra cada fila sin depender de un número correlativo. Es el tipo de las claves (`*_id`) del modelo (ver [§6](#6-modelo-de-entidades-conceptual)). |
+| **BlurHash / ThumbHash** | Cadena corta (~25 caracteres) que codifica una miniatura borrosa de una imagen; se muestra al instante mientras carga la foto real, sin salto de layout. Se guarda junto a la URL (campo `photo_blur_hash`). Son las dos variantes vigentes; la elección va a la v2 (ver [§6](#6-modelo-de-entidades-conceptual)). |
 | **Rate limiting** | Límite a la cantidad de veces que una operación puede ejecutarse en una ventana de tiempo (contado por IP, por email o por proyecto, según la operación). Primera defensa contra bots, fuerza bruta y abuso de los endpoints públicos (ver [§8.2](#82-rate-limiting-y-anti-automatización)). |
 | **CAPTCHA** | Desafío que distingue personas de bots en los endpoints públicos. Estándar de Eurekant: Cloudflare Turnstile, integrado nativamente en Supabase e invisible para el usuario en la gran mayoría de los casos (ver [§8.2](#82-rate-limiting-y-anti-automatización)). |
 | **Override (de parámetro)** | Valor específico de una empresa o sucursal que reemplaza al valor global de un parámetro del sistema; gana siempre el más específico (ver [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides)). |
-| **BR (Business Rule)** | Regla de negocio obligatoria del estándar ([BR-01](#11-reglas-de-negocio-e-integridad-resumen-normativo)…[BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo), ver [§11](#11-reglas-de-negocio-e-integridad-resumen-normativo)). Mismo prefijo que usan los SRS de Eurekant. |
+| **BR (Business Rule)** | Regla de negocio obligatoria del estándar ([BR-01](#11-reglas-de-negocio-e-integridad-resumen-normativo)…[BR-21](#11-reglas-de-negocio-e-integridad-resumen-normativo), ver [§11](#11-reglas-de-negocio-e-integridad-resumen-normativo)). Mismo prefijo que usan los SRS de Eurekant. |
 | **Staff** | Las personas que **operan** el sistema: dueños, administradores, gerentes, empleados. Tienen roles y permisos y entran por los caminos A/B/C ([§7](#7-flujos-de-incorporación-de-usuarios)). Se contrapone al *usuario final*, que consume. Es término de uso estándar en la industria (ej: Shopify *staff accounts*, Django `is_staff`). |
 | **Usuario final** | Persona que **consume** lo que los negocios ofrecen (turnos, pedidos, puntos) en lugar de operarlos. No es staff: no tiene roles ni permisos; su cuenta nace libre y su acceso es de identidad propia (ver [§4.2](#42-usuarios-finales-la-otra-cara-del-sistema)). |
 | **Ficha de cliente (`COMPANY_CUSTOMERS`)** | El registro de una persona como cliente de un negocio concreto, exista o no su cuenta en la app; si tiene cuenta, la ficha la referencia (ver [§4.2](#42-usuarios-finales-la-otra-cara-del-sistema) y [§7.9](#79-camino-d--registro-del-usuario-final)). |
 | **Catálogo público** | El listado de perfiles de las empresas que cualquier usuario autenticado puede leer sin tener vínculo previo con ellas. Es una de las tres familias de acceso (ver [§4.2](#42-usuarios-finales-la-otra-cara-del-sistema) y [§9.2](#92-quién-accede-las-tres-familias-de-acceso)). |
+| **Comunicado (`ANNOUNCEMENTS`)** | Aviso del sistema hacia los usuarios —mantenimiento programado, incidente, novedad— con título, cuerpo, tipo, ventana de vigencia y destinatarios. Se publica sin que el usuario actualice la app (ver [§6](#6-modelo-de-entidades-conceptual) y [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides)). |
 
 ---
 
@@ -301,6 +304,7 @@ erDiagram
     USERS ||--o{ OWNERSHIP_TRANSFERS : "ofrece (saliente)"
     USERS ||--o{ OWNERSHIP_TRANSFERS : "recibe la oferta"
     COMPANIES ||--o{ COMPANY_CUSTOMERS : "tiene clientes"
+    COMPANIES |o--o{ ANNOUNCEMENTS : "emite (o global)"
     USERS |o--o{ COMPANY_CUSTOMERS : "vincula su cuenta (opcional)"
     USER_ROLES |o--o{ COMPANY_CUSTOMERS : "registra (staff)"
     USERS ||--o| SUPERADMINS : "puede ser"
@@ -311,24 +315,38 @@ erDiagram
         citext user_email UK "global, única"
         citext first_name
         citext last_name
-        varchar avatar_url "nullable"
-        boolean is_active
+        varchar photo_url "nullable"
+        varchar photo_blur_hash "nullable"
+        timestamptz deactivated_at "NULL = activo"
         timestamptz last_seen
+        uuid created_by FK "nullable - autorregistro/sistema"
+        uuid updated_by FK "nullable"
         timestamptz created_at
+        timestamptz updated_at
     }
     COMPANIES {
         uuid company_id PK
         citext company_name
         uuid owner_id FK "USERS - dueño único"
-        boolean is_active
+        varchar photo_url "nullable - logo"
+        varchar photo_blur_hash "nullable"
+        timestamptz deactivated_at "NULL = activo"
+        uuid created_by FK "nullable - initial setup"
+        uuid updated_by FK "nullable"
         timestamptz created_at
+        timestamptz updated_at
     }
     BRANCHES {
         uuid branch_id PK
         uuid company_id FK
         citext branch_name "única por empresa"
-        boolean is_active
+        varchar photo_url "nullable"
+        varchar photo_blur_hash "nullable"
+        timestamptz deactivated_at "NULL = activo"
+        uuid created_by FK "USER_ROLES"
+        uuid updated_by FK "USER_ROLES"
         timestamptz created_at
+        timestamptz updated_at
     }
     ROLES {
         uuid role_id PK
@@ -336,7 +354,10 @@ erDiagram
         citext role_name "única por empresa"
         varchar descriptions "nullable"
         boolean is_default "true = admin, inmutable"
-        boolean is_active
+        uuid created_by FK "USER_ROLES - quién lo creó"
+        uuid updated_by FK "USER_ROLES - última edición"
+        timestamptz updated_at
+        timestamptz deactivated_at "NULL = activo"
         timestamptz created_at
     }
     PERMISSIONS {
@@ -344,20 +365,31 @@ erDiagram
         varchar permission_code UK "ej products.create"
         varchar permission_module "ej products"
         varchar descriptions
-        boolean is_active
+        timestamptz deactivated_at "NULL = activo"
+        uuid created_by FK "nullable - semilla/sistema"
+        uuid updated_by FK "nullable"
+        timestamptz created_at
+        timestamptz updated_at
     }
     ROLE_PERMISSIONS {
         uuid role_permission_id PK
         uuid role_id FK
         uuid permission_id FK
+        uuid created_by FK "USER_ROLES"
+        uuid updated_by FK "USER_ROLES"
+        timestamptz created_at
+        timestamptz updated_at
     }
     USER_ROLES {
         uuid user_role_id PK
         uuid user_id FK
         uuid role_id FK
         uuid branch_id FK "misma empresa que el rol"
-        boolean is_active
+        timestamptz deactivated_at "NULL = activo"
+        uuid created_by FK "USER_ROLES"
+        uuid updated_by FK "USER_ROLES"
         timestamptz created_at
+        timestamptz updated_at
     }
     INVITATIONS {
         uuid invitation_id PK
@@ -367,10 +399,12 @@ erDiagram
         citext invitation_email
         citext first_name "precargado en camino B - nullable"
         citext last_name "precargado en camino B - nullable"
-        uuid invited_by FK "USER_ROLES de quien invita"
+        uuid created_by FK "USER_ROLES - quién invitó"
         varchar invitation_status "pending-accepted-rejected-expired-revoked"
         timestamptz expires_at
+        uuid updated_by FK "USER_ROLES"
         timestamptz created_at
+        timestamptz updated_at
     }
     OWNERSHIP_TRANSFERS {
         uuid ownership_transfer_id PK
@@ -379,7 +413,10 @@ erDiagram
         uuid to_user_id FK "USERS - receptor"
         varchar transfer_status "pending-accepted-rejected-expired-revoked"
         timestamptz expires_at
+        uuid created_by FK "USER_ROLES - quién inició"
+        uuid updated_by FK "USER_ROLES"
         timestamptz created_at
+        timestamptz updated_at
     }
     COMPANY_CUSTOMERS {
         uuid company_customer_id PK
@@ -392,24 +429,49 @@ erDiagram
         citext customer_email "nullable"
         varchar customer_phone "nullable"
         uuid created_by FK "USER_ROLES - nullable si se autoregistro"
-        boolean is_active
+        uuid updated_by FK "USER_ROLES - nullable"
+        timestamptz updated_at
+        timestamptz deactivated_at "NULL = activo"
         timestamptz created_at
     }
     SUPERADMINS {
         uuid superadmin_id PK
         uuid user_id FK "única - un user es o no superadmin"
-        boolean is_active
+        timestamptz deactivated_at "NULL = activo"
+        uuid created_by FK "nullable - SUPERADMINS/sistema"
+        uuid updated_by FK "nullable"
         timestamptz created_at
+        timestamptz updated_at
     }
     SYSTEM_SETTINGS {
         uuid system_setting_id PK
         varchar setting_key UK "ej mercadopago.commission"
         jsonb setting_value
         varchar descriptions
+        uuid created_by FK "SUPERADMINS"
         uuid updated_by FK "SUPERADMINS"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    ANNOUNCEMENTS {
+        uuid announcement_id PK
+        uuid company_id FK "nullable: NULL = comunicado global"
+        varchar title
+        varchar body
+        varchar announcement_type "info-maintenance-incident"
+        varchar audience "staff-end_users-all"
+        timestamptz active_from
+        timestamptz active_to "nullable"
+        boolean is_dismissible
+        uuid created_by FK "USER_ROLES o SUPERADMINS"
+        uuid updated_by FK "USER_ROLES o SUPERADMINS"
+        timestamptz deactivated_at "NULL = activo"
+        timestamptz created_at
         timestamptz updated_at
     }
 ```
+
+> **Auditoría y baja, en todas las tablas.** Toda tabla del modelo lleva el **cuádruple de auditoría** —`created_at`, `updated_at`, `created_by`, `updated_by` ([BR-20](#11-reglas-de-negocio-e-integridad-resumen-normativo))— y, donde aplica baja lógica, `deactivated_at` ([BR-21](#11-reglas-de-negocio-e-integridad-resumen-normativo); nulo = activo). Las fechas las maneja la base; el «quién» (`created_by`/`updated_by`) sigue la convención de [BR-14](#11-reglas-de-negocio-e-integridad-resumen-normativo): `USER_ROLES` (staff), ficha de cliente (usuario final) o `SUPERADMINS`, o nulo si lo hizo el sistema (semillas, *initial setup*) o un autorregistro.
 
 ### 6.1 Notas por entidad
 
@@ -438,6 +500,8 @@ erDiagram
 **`SUPERADMINS`** — Lista blanca de usuarios con acceso global (ver [§10](#10-superadmin-la-capa-del-dueño-del-software)). Deliberadamente fuera del modelo de roles de empresa.
 
 **`SYSTEM_SETTINGS`** — Parametrización del software, editable desde el panel superadmin. En la v2 se acompaña de un catálogo con metadatos por parámetro y tablas de override por empresa y sucursal — una cascada donde gana el valor más específico (ver [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides)).
+
+**`ANNOUNCEMENTS`** — Comunicados del sistema hacia los usuarios (mantenimiento, incidentes, novedades): título, cuerpo, tipo, ventana de vigencia (`active_from`/`active_to`) y destinatarios. `company_id` nulo = comunicado global del superadmin; con valor = comunicado de una empresa para su gente. Se publican sin que el usuario actualice la app (ver [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides)). El detalle fino de segmentación y alcance queda diferido ([§13.3](#133-temas-diferidos-a-la-v2)).
 
 > 💡 **Ejemplo práctico — `created_by` apuntando a `USER_ROLES`**
 > En el sistema de la pizzería, la tabla `ORDERS` tiene `created_by` → `USER_ROLES.user_role_id`. Cuando se audita una venta sospechosa, no solo se sabe que la hizo Juan: se sabe que la hizo **Juan actuando como Cajero en la sucursal Centro**, aunque hoy Juan ya sea Encargado. El contexto histórico queda congelado.
@@ -867,7 +931,7 @@ Todo lo que sigue ([§9.3](#93-cómo-funcionará-conceptual-el-detalle-va-en-la-
 - **Trade-off conocido:** el token es una **foto** de los permisos, tomada al armar el contexto activo. Se gana velocidad (la base no consulta las tablas de roles en cada query) a cambio de inmediatez: un cambio de rol o de permisos no se refleja en los tokens ya emitidos hasta que expiran y se renuevan (hasta 1 hora con el valor estándar, ver [§8.1](#81-política-de-sesiones-y-renovación-de-tokens)). Por eso los tokens son de **vida corta**, y las acciones críticas (desactivar un usuario, suspender una empresa) se complementan con verificación en base, que aplica al instante. Es la decisión estándar de la industria (Supabase, Auth0, Firebase): la alternativa — verificar todo en base en cada query — elimina esa ventana de minutos al costo del rendimiento de todo el sistema, todo el tiempo. La política completa de duración y renovación de tokens está en [§8.1](#81-política-de-sesiones-y-renovación-de-tokens).
 
 > 💡 **Ejemplo práctico — el cajero desvinculado**
-> Despiden a un cajero a las 10:00 y el admin lo desactiva al instante. Su token vigente puede seguir siendo válido hasta las 11:00 (vida estándar de 1 hora, [§8.1](#81-política-de-sesiones-y-renovación-de-tokens)): durante esa ventana, su "credencial" todavía dice *Cajero de la sucursal Centro*. Para las operaciones comunes esa ventana es tolerable y se cierra sola. Para lo crítico no se espera: la baja del usuario también se verifica en base ([BR-08](#11-reglas-de-negocio-e-integridad-resumen-normativo): pierde acceso de inmediato), igual que la suspensión de una empresa (`COMPANIES.is_active = false` corta el acceso vía RLS al instante).
+> Despiden a un cajero a las 10:00 y el admin lo desactiva al instante. Su token vigente puede seguir siendo válido hasta las 11:00 (vida estándar de 1 hora, [§8.1](#81-política-de-sesiones-y-renovación-de-tokens)): durante esa ventana, su "credencial" todavía dice *Cajero de la sucursal Centro*. Para las operaciones comunes esa ventana es tolerable y se cierra sola. Para lo crítico no se espera: la baja del usuario también se verifica en base ([BR-08](#11-reglas-de-negocio-e-integridad-resumen-normativo): pierde acceso de inmediato), igual que la suspensión de una empresa (`COMPANIES.deactivated_at` corta el acceso vía RLS al instante).
 
 ### 9.4 Tablas operativas y la columna de tenant: análisis de normalización
 
@@ -977,6 +1041,19 @@ Por qué este diseño escala bien:
 > 💡 **Ejemplo práctico — métricas de uso**
 > Eurekant quiere saber si conviene programar los mantenimientos a la madrugada. El panel superadmin muestra que el 80% de la actividad ocurre entre 9 y 21 hs, y que los domingos el uso cae al 5%. Decisión tomada con datos, sin tocar la base a mano.
 
+**Keys conocidas del estándar.** Más allá de los parámetros propios de cada sistema, el estándar reserva un conjunto de keys que toda app Eurekant lee para operar sin redeploy:
+
+| Key | Para qué |
+|---|---|
+| `app.min_supported_version.{android,ios,web}` | Versión mínima soportada por plataforma: por debajo, **update forzado** (pantalla bloqueante). |
+| `app.latest_version.{android,ios,web}` | Última versión disponible: si la del usuario es menor pero ≥ la mínima, **aviso suave** de actualización. |
+| `app.store_url.android` · `app.store_url.ios` · `app.web_url` | Enlaces a Play Store, App Store y web. |
+| `support.whatsapp` · `support.email` | Canales de soporte. |
+| `legal.terms_url` · `legal.privacy_url` · `legal.data_deletion_url` | Términos y condiciones, política de privacidad y solicitud de eliminación de datos. |
+| `system.maintenance_mode` | Interruptor de mantenimiento: deja la app en solo-lectura o bloqueada, con un mensaje. Distinto del comunicado, que solo informa. |
+
+Son globales por defecto, pero la misma cascada permite override por empresa (ej: cada negocio con su propio WhatsApp de soporte). Los **avisos con contenido y vigencia** —«mantenimiento de 2 a 4 AM», «estamos revisando un problema»— no son una key sino una entidad propia, los **comunicados** (`ANNOUNCEMENTS`, [§6](#6-modelo-de-entidades-conceptual)): tienen título, cuerpo, tipo, ventana y destinatarios.
+
 ---
 
 ## 11. Reglas de negocio e integridad (resumen normativo)
@@ -998,12 +1075,14 @@ Estas reglas son **obligatorias** en todos los proyectos. Usan el prefijo **BR**
 | [BR-11](#11-reglas-de-negocio-e-integridad-resumen-normativo) | Toda tabla operativa lleva `company_id` (y `branch_id` si su alcance es por sucursal), con RLS activo e índices sobre esas columnas. Sin excepciones (análisis y justificación en [§9.4](#94-tablas-operativas-y-la-columna-de-tenant-análisis-de-normalización)). |
 | [BR-12](#11-reglas-de-negocio-e-integridad-resumen-normativo) | El catálogo `PERMISSIONS` solo lo modifica el equipo de desarrollo (datos semilla); las empresas no lo editan. |
 | [BR-13](#11-reglas-de-negocio-e-integridad-resumen-normativo) | El acceso superadmin se define en políticas explícitas y auditables, nunca como bypass genérico. |
-| [BR-14](#11-reglas-de-negocio-e-integridad-resumen-normativo) | Los campos de auditoría (`created_by`, `updated_by`) referencian `USER_ROLES`, no `USERS`, para congelar el contexto (quién, con qué rol, en qué sucursal). Aplica a las acciones del staff; en las filas originadas por usuarios finales —que no tienen asignaciones ([BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo))— la autoría se registra contra su ficha de cliente (`COMPANY_CUSTOMERS`). |
+| [BR-14](#11-reglas-de-negocio-e-integridad-resumen-normativo) | Los campos de auditoría (`created_by`, `updated_by`) referencian `USER_ROLES`, no `USERS`, para congelar el contexto (quién, con qué rol, en qué sucursal). Aplica a las acciones del staff; en las filas originadas por usuarios finales —que no tienen asignaciones ([BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo))— la autoría se registra contra su ficha de cliente (`COMPANY_CUSTOMERS`); y las acciones propias del superadmin (ej: parámetros del sistema, comunicados globales) contra `SUPERADMINS`. |
 | [BR-15](#11-reglas-de-negocio-e-integridad-resumen-normativo) | Un usuario puede tener varios roles en la misma sucursal, pero los permisos **nunca se combinan**: se opera bajo un único rol a la vez — el contexto activo incluye el rol (ver [§8](#8-contexto-activo-en-qué-empresa-sucursal-y-rol-estoy-parado)). |
 | [BR-16](#11-reglas-de-negocio-e-integridad-resumen-normativo) | **Prevención de inconsistencia de tenant:** las relaciones entre tablas operativas usan FKs compuestas que incluyen el tenant; `company_id`/`branch_id` nunca los escribe la aplicación; y toda política RLS de inserción/actualización incluye `WITH CHECK`. En la familia staff, el tenant se completa por defecto desde los claims del contexto activo y el `WITH CHECK` valida contra esos claims; en las escrituras de usuarios finales (identidad propia, [§9.2](#92-quién-accede-las-tres-familias-de-acceso)) el tenant sale de la operación misma —la empresa de la ficha o del perfil del catálogo sobre el que actúan— y el `WITH CHECK` valida que la fila quede atada a una ficha vinculada a su cuenta ([BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo)). Ver [§9.4](#94-tablas-operativas-y-la-columna-de-tenant-análisis-de-normalización). |
 | [BR-17](#11-reglas-de-negocio-e-integridad-resumen-normativo) | **Transferencia de ownership con confirmación:** requiere la aceptación explícita del receptor, que debe ser un usuario activo de la empresa (al aceptar recibe el rol admin si no lo tenía). Solo puede existir una transferencia pendiente por empresa; es revocable mientras esté pendiente y expira (parametrizable, default 7 días; una expirada no se reenvía — se inicia una nueva). El Owner saliente conserva el rol admin. La aceptación es una transacción única ([§7.8](#78-transferencia-de-ownership)). |
 | [BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo) | **El usuario final no es un rol:** no tiene filas en `ROLES`/`USER_ROLES` ni permisos del catálogo; su relación con cada negocio es una ficha de cliente (`COMPANY_CUSTOMERS`, única por `empresa + cuenta` cuando hay cuenta vinculada) y su acceso a datos es de identidad propia. La vinculación de una ficha a una cuenta exige prueba y aceptación del usuario: el email verificado basta como prueba (el vínculo se ofrece en el momento); la coincidencia por documento exige además una prueba fuerte parametrizable y nunca vincula por sí sola ni revela los datos de la ficha — solo el contacto enmascarado necesario para la prueba ([§4.2](#42-usuarios-finales-la-otra-cara-del-sistema), [§7.9](#79-camino-d--registro-del-usuario-final)). |
 | [BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo) | **Contacto provisional cargado por el staff:** el email o teléfono que un operador registra en una ficha de cliente es provisional y no verificado — no vincula la ficha a ninguna cuenta por sí solo. El sistema marca anomalías (contacto del propio operador o repetido en muchas fichas) para revisión; el contacto verificado por el dueño real lo reemplaza; los canjes de valor y la vinculación exigen prueba fuerte ([BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo), [§7.9](#79-camino-d--registro-del-usuario-final)). |
+| [BR-20](#11-reglas-de-negocio-e-integridad-resumen-normativo) | **Cuádruple de auditoría:** toda tabla lleva `created_at`, `updated_at`, `created_by` y `updated_by`. Las fechas las maneja la base (default + trigger); `created_by`/`updated_by` apuntan al actor según [BR-14](#11-reglas-de-negocio-e-integridad-resumen-normativo) (`USER_ROLES`, ficha de cliente o `SUPERADMINS`), o quedan nulos si el autor es el sistema o un autorregistro. |
+| [BR-21](#11-reglas-de-negocio-e-integridad-resumen-normativo) | **Baja lógica por timestamp:** el soft delete se expresa con `deactivated_at` (nulo = activo; con fecha = desactivado), no con un booleano. Filtra igual (`deactivated_at IS NULL`) y además registra cuándo; junto con `updated_by`, también quién. Reactivar = volver a nulo. |
 
 ---
 
@@ -1020,7 +1099,7 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 | Usuario desvinculado conserva token JWT vigente | Acceso residual acotado (hasta 1 hora, [§8.1](#81-política-de-sesiones-y-renovación-de-tokens)) | Trade-off conocido ([§9.3](#93-cómo-funcionará-conceptual-el-detalle-va-en-la-v2)): tokens de vida corta + verificación en base para acciones críticas. |
 | Dos roles distintos del mismo usuario en la misma sucursal | Ambigüedad de permisos | Permitido, **sin combinar permisos**: el usuario opera con un rol a la vez; el contexto activo incluye el rol ([§8](#8-contexto-activo-en-qué-empresa-sucursal-y-rol-estoy-parado), [BR-15](#11-reglas-de-negocio-e-integridad-resumen-normativo)). |
 | Sistemas "chicos" que no usan sucursales | Tentación de simplificar el modelo y romper el estándar | Prohibido por principio 1: siempre existen `COMPANIES` y `BRANCHES`, aunque tengan una fila. La UI puede ocultar el concepto. |
-| Empresa suspendida (ej: falta de pago) | Usuarios siguen operando | `COMPANIES.is_active = false` corta el acceso vía RLS a todos sus miembros de inmediato, sin tocar sus asignaciones. |
+| Empresa suspendida (ej: falta de pago) | Usuarios siguen operando | `COMPANIES.deactivated_at` (con fecha) corta el acceso vía RLS a todos sus miembros de inmediato, sin tocar sus asignaciones. |
 | Invitador escribe mal los datos del invitado | Datos incorrectos permanentes | La persona invitada revisa y corrige sus datos al registrarse ([§7.6](#76-camino-b--registro-por-invitación-usuario-nuevo)). |
 | Sucursal desactivada con usuarios asignados | Asignaciones colgando de algo inactivo | Las asignaciones de esa sucursal quedan inactivas en cascada lógica; si un usuario queda sin ninguna asignación activa, no puede ingresar a esa empresa. |
 | Borrado físico de usuarios | Historial y auditoría rotos | [BR-08](#11-reglas-de-negocio-e-integridad-resumen-normativo) y [BR-14](#11-reglas-de-negocio-e-integridad-resumen-normativo): soft delete + auditoría sobre `USER_ROLES`. |
@@ -1077,6 +1156,11 @@ Todas las decisiones fueron validadas con Franco Cruz en la fecha indicada.
 | 27 | **Contacto provisional y antifraude del staff** | El contacto (email/teléfono) que el staff carga en una ficha es provisional: no vincula por sí solo, el sistema marca anomalías para revisión (contacto del propio empleado o repetido en muchas fichas), el contacto verificado del dueño lo reemplaza, y los canjes de valor exigen prueba fuerte. Cierra el hueco del empleado que carga su propio contacto para quedarse con los beneficios del cliente. | 13/Jun/26 | [§7.9](#79-camino-d--registro-del-usuario-final), [BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo) |
 | 28 | **Terminología: «staff» y «ficha de cliente»** | Se mantiene «staff» para los operadores —término estándar de la industria (Shopify *staff accounts*, Django `is_staff`)— con entrada de glosario; se renombra «carpeta de cliente» a «ficha de cliente», el término estándar en el SaaS hispano, transversal a salud y gastronomía. | 13/Jun/26 | [§3](#3-glosario), [§4.2](#42-usuarios-finales-la-otra-cara-del-sistema) |
 | 29 | **Principio rector: ante la duda, preguntar — no asumir** | Si algo del estándar no queda claro o parece incompleto, no se asume comportamiento ni se decide a las apuradas: se consulta antes de avanzar. Una mala suposición en la capa de datos es el retrabajo más caro (analogía del ascensor). Queda escrito al inicio del documento. | 13/Jun/26 | [§1](#1-propósito-y-alcance) |
+| 30 | **Checklist de implementación (Anexo A)** | Anexo con la lista de verificación de todo lo que hay que crear y configurar para levantar el estándar, enlazado por ítem a su sección. Captura lo fácil de olvidar (ej: SMTP de producción). | 13/Jun/26 | [Anexo A](#anexo-a--checklist-de-implementación), [§15](#15-próximos-pasos) |
+| 31 | **Cuádruple de auditoría en toda tabla** | `created_at`, `updated_at`, `created_by`, `updated_by` (no `edited_by`). Fechas por la base; el actor según [BR-14](#11-reglas-de-negocio-e-integridad-resumen-normativo). | 13/Jun/26 | [§6](#6-modelo-de-entidades-conceptual), [BR-20](#11-reglas-de-negocio-e-integridad-resumen-normativo) |
+| 32 | **Baja lógica por `deactivated_at`** | Reemplaza el booleano `is_active` por un timestamp anulable: misma filtración, pero registra cuándo se dio de baja (y con `updated_by`, quién). | 13/Jun/26 | [§6](#6-modelo-de-entidades-conceptual), [BR-21](#11-reglas-de-negocio-e-integridad-resumen-normativo) |
+| 33 | **`SYSTEM_SETTINGS`: keys conocidas, version-gating y comunicados** | Keys estándar (versión por plataforma con forzado/suave, tiendas/web, soporte, legales, `maintenance_mode`) y entidad `ANNOUNCEMENTS` para avisos con vigencia. | 13/Jun/26 | [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides), [§6](#6-modelo-de-entidades-conceptual) |
+| 34 | **Foto con placeholder en personas, empresas y sucursales** | `photo_url` + `photo_blur_hash` (miniatura borrosa instantánea). BlurHash o ThumbHash en la v2. | 13/Jun/26 | [§6](#6-modelo-de-entidades-conceptual) |
 
 ### 13.2 Preguntas abiertas (a definir antes de la v2)
 
@@ -1091,6 +1175,7 @@ Temas cuyo **concepto ya está decidido** pero cuyo **detalle fino se difiere a 
 | D-01 | **Fusión de fichas de cliente duplicadas** | Herramienta del negocio para unir dos fichas de la misma persona: criterios de detección de duplicados, fusión manual vs. asistida, quién puede ejecutarla y qué pasa con los puntos, el historial y los vínculos al unir. | [§7.9](#79-camino-d--registro-del-usuario-final), [§12](#12-casos-borde-y-puntos-de-fuga-analizados), [BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo) |
 | D-02 | **Umbrales del antifraude de contacto provisional** | El concepto está cerrado (decisión [27](#131-decisiones-confirmadas), [BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo)); falta fijar los valores: cuántas fichas con el mismo contacto disparan la alerta de anomalía y qué se hace con la ficha marcada (revisión manual, bloqueo del canje, etc.). | [§7.9](#79-camino-d--registro-del-usuario-final), [§8.2](#82-rate-limiting-y-anti-automatización), [BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo) |
 | D-03 | **Catálogo de «prueba fuerte» por rubro** | Qué prueba exige cada tipo de sistema al vincular una ficha por documento (confirmación presencial, código al contacto, etc.) y sus valores por defecto, como ficha parametrizable de [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides). | [§7.9](#79-camino-d--registro-del-usuario-final), [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides), [BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo) |
+| D-04 | **Segmentación y alcance de los comunicados** | Reglas finas de a quién llega cada comunicado (por rol, empresa, sucursal; staff vs. usuarios finales), prioridad y apilado de varios activos a la vez, y si un admin de empresa puede emitir a sus clientes. | [§6](#6-modelo-de-entidades-conceptual), [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides) |
 
 ---
 
@@ -1107,6 +1192,8 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 ---
 
 ## 15. Próximos pasos
+
+> 📋 Para llevar el estándar a la práctica, el **[Anexo A — Checklist de implementación](#anexo-a--checklist-de-implementación)** resume en una lista de verificación todo lo que hay que crear y configurar.
 
 1. Validar este documento con el equipo (especialmente las decisiones [15](#131-decisiones-confirmadas) a [28](#131-decisiones-confirmadas) de [§13.1](#131-decisiones-confirmadas)).
 2. **v2 — documento técnico separado (decisión [21](#131-decisiones-confirmadas), [§1.1](#11-un-estándar-dos-documentos)):** DDL completo en SQL — tablas, constraints, índices, funciones (`fn_initial_setup`, `fn_has_permission`, `fn_get_setting`), triggers de integridad ([BR-03](#11-reglas-de-negocio-e-integridad-resumen-normativo), [BR-04](#11-reglas-de-negocio-e-integridad-resumen-normativo), [BR-17](#11-reglas-de-negocio-e-integridad-resumen-normativo)), FKs compuestas y defaults desde claims con `WITH CHECK` ([BR-16](#11-reglas-de-negocio-e-integridad-resumen-normativo)), políticas RLS de las tres familias (staff, identidad propia y catálogo público, [§9.2](#92-quién-accede-las-tres-familias-de-acceso)), la entidad de auditoría (decisión [17](#131-decisiones-confirmadas)), el catálogo de parámetros con sus overrides (decisión [16](#131-decisiones-confirmadas)), la configuración de rate limiting y CAPTCHA ([§8.2](#82-rate-limiting-y-anti-automatización)), y `COMPANY_CUSTOMERS` con el flujo de vinculación, el antifraude del contacto provisional ([BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo)) y la fusión de fichas duplicadas (decisiones [26](#131-decisiones-confirmadas) y [27](#131-decisiones-confirmadas), [BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo) y [BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo)), todo según la Naming Convention Guide. Incluye la tabla de trazabilidad (cada BR y decisión → los objetos que la implementan) y declara qué versión de este documento implementa. Los temas cuyo detalle de diseño todavía debe definirse —no solo implementarse— están registrados en [§13.3](#133-temas-diferidos-a-la-v2).
@@ -1130,6 +1217,7 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 | 1.8.0 | 12/Jun/26 | Modelo de **usuarios finales** (decisión [26](#131-decisiones-confirmadas)): nueva [§4.2](#42-usuarios-finales-la-otra-cara-del-sistema) — cuenta global que nace libre, catálogo público para explorar, carpeta de cliente por negocio con o sin cuenta (`COMPANY_CUSTOMERS`, nueva entidad estándar) y vinculación por uso o reclamo con prueba; nueva [BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo); camino D de registro ([§7.9](#79-camino-d--registro-del-usuario-final)) con coincidencia por documento y prueba fuerte parametrizable; tres familias de política RLS según quién accede ([§9.2](#92-quién-accede-las-tres-familias-de-acceso)); cuatro casos borde nuevos (apropiación por DNI, clientes sin cuenta, carpetas duplicadas, privacidad entre negocios). Alcance aclarado: estándar agnóstico del lado del cliente y fijo en Supabase, con las menciones a Flutter como ejemplo ([§1](#1-propósito-y-alcance), [§8.1](#81-política-de-sesiones-y-renovación-de-tokens), [§8.2](#82-rate-limiting-y-anti-automatización), decisión [24](#131-decisiones-confirmadas)). `INVITATIONS` conserva su nombre y el historial de eventos vive en el log de auditoría ([§6.1](#61-notas-por-entidad), [§7.5](#75-ciclo-de-vida-de-una-invitación), decisión [25](#131-decisiones-confirmadas)). Glosario: usuario final, carpeta de cliente. |
 | 1.9.0 | 13/Jun/26 | Terminología y refinamientos del modelo de usuarios finales: glosario de **staff** (se mantiene el término — estándar de Shopify/Django) y renombre **«carpeta de cliente» → «ficha de cliente»** (estándar del SaaS hispano, transversal a salud y gastronomía) en todo el documento, conservando las menciones históricas (decisión [28](#131-decisiones-confirmadas)). Antifraude del **contacto provisional cargado por el staff**: nueva [BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo), regla y ejemplo en [§7.9](#79-camino-d--registro-del-usuario-final), caso borde y decisión [27](#131-decisiones-confirmadas) (cierra el hueco del empleado que carga su propio contacto para robar beneficios). Las **tres familias de acceso** ascienden a subsección propia [§9.2](#92-quién-accede-las-tres-familias-de-acceso) (con la tabla staff / identidad propia / catálogo público), renumerando [§9.2](#92-quién-accede-las-tres-familias-de-acceso)→[§9.5](#95-qué-ve-cada-capa). Nota de `INVITATIONS` ([§6.1](#61-notas-por-entidad)) unificada con la redacción de [§7.5](#75-ciclo-de-vida-de-una-invitación) («refleja el estado actual»). Redacción del vínculo ficha↔cuenta sin la palabra «reclamo». |
 | 1.10.0 | 13/Jun/26 | Glosario ampliado con siete términos núcleo (tenant/multi-tenancy, RLS, RBAC, soft delete, catálogo público, UUID, dato semilla). Nuevo **principio rector «ante la duda, preguntar — no asumir»** al inicio de [§1](#1-propósito-y-alcance) (decisión [29](#131-decisiones-confirmadas)). Formato de fecha unificado a `DD/MMM/YY` en todo el documento. **Referencias cruzadas clickeables**: cada `§`, `BR-NN` y `decisión N` enlaza a su sección — los `§` al anclaje exacto, `BR`/`decisión` a su tabla. Nueva **[§13.3](#133-temas-diferidos-a-la-v2) «Temas diferidos a la v2»** (fusión de fichas, umbrales del antifraude, prueba fuerte por rubro), referenciada desde [§15](#15-próximos-pasos). |
+| 1.11.0 | 13/Jun/26 | Modelo más completo y técnico: **cuádruple de auditoría** (`created_at`/`updated_at`/`created_by`/`updated_by`) en toda tabla ([BR-20](#11-reglas-de-negocio-e-integridad-resumen-normativo), decisión [31](#131-decisiones-confirmadas)) y **baja lógica por `deactivated_at`** reemplazando el booleano `is_active` ([BR-21](#11-reglas-de-negocio-e-integridad-resumen-normativo), decisión [32](#131-decisiones-confirmadas)). **Foto con placeholder** `photo_url` + `photo_blur_hash` en personas, empresas y sucursales (decisión [34](#131-decisiones-confirmadas)). `SYSTEM_SETTINGS`: keys conocidas (versión por plataforma con update forzado/suave, tiendas, soporte, legales, `maintenance_mode`) y nueva entidad **comunicados** (`ANNOUNCEMENTS`) para avisos con vigencia (decisión [33](#131-decisiones-confirmadas), [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides)). Nuevo **Anexo A — Checklist de implementación** (decisión [30](#131-decisiones-confirmadas)). [§13.3](#133-temas-diferidos-a-la-v2): diferida la segmentación de comunicados (D-04). |
 
 ---
 
@@ -1141,9 +1229,9 @@ Una fila por aprobador de la versión en circulación (los borradores superados 
 
 | Versión | Rol | Nombre | Fecha | Estado |
 |---|---|---|---|---|
-| 1.10.0 | CEO | Franco Cruz | — | Pendiente |
-| 1.10.0 | CTO | — | — | Pendiente |
-| 1.10.0 | Líder técnico | — | — | Pendiente |
+| 1.11.0 | CEO | Franco Cruz | — | Pendiente |
+| 1.11.0 | CTO | — | — | Pendiente |
+| 1.11.0 | Líder técnico | — | — | Pendiente |
 
 ### 17.2 Auditorías y revisiones
 
@@ -1162,3 +1250,42 @@ Registro de cada revisión del documento, haya derivado o no en un cambio de ver
 | 12/Jun/26 | Franco Cruz | Alcance, historial de invitaciones y usuarios finales (v1.7.0) | Decisiones adoptadas | Tres temas: estándar agnóstico del lado del cliente (decisión [24](#131-decisiones-confirmadas)); estado vs. eventos en invitaciones — la tabla conserva su nombre y el log lleva el paso a paso (decisión [25](#131-decisiones-confirmadas)); y modelo completo de usuarios finales, refinado en tres idas y vueltas (cuenta libre, catálogo público, carpeta por negocio con o sin cuenta, vinculación con prueba) — decisión [26](#131-decisiones-confirmadas) y [BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo). Origen de la v1.8.0. |
 | 13/Jun/26 | Franco Cruz | Terminología, seguridad de fichas y familias de acceso (v1.8.0) | Decisiones adoptadas | 6 puntos: glosario de «staff» (se mantiene, con investigación del término estándar — Shopify/Django/Zendesk); renombre «carpeta»→«ficha de cliente» (con investigación: estándar hispano transversal a salud y gastronomía) — decisión [28](#131-decisiones-confirmadas); redacción del vínculo sin «reclamo»; unificación de la nota de `INVITATIONS` con [§7.5](#75-ciclo-de-vida-de-una-invitación); antifraude del contacto cargado por el staff ([BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo), decisión [27](#131-decisiones-confirmadas)); y subsección propia para las tres familias de acceso ([§9.2](#92-quién-accede-las-tres-familias-de-acceso)). Origen de la v1.9.0. |
 | 13/Jun/26 | Franco Cruz | Glosario, principio rector, formato de fecha, navegación y temas diferidos (v1.9.0) | Cambios solicitados | 5 puntos que originaron la v1.10.0: «tenant» y otros seis términos al glosario; principio «ante la duda, preguntar — no asumir» al inicio (decisión [29](#131-decisiones-confirmadas)); formato de fecha unificado a DD/MMM/YY; referencias cruzadas clickeables (§ a la sección exacta, BR/decisión a su tabla); y nueva [§13.3](#133-temas-diferidos-a-la-v2) de temas diferidos a la v2. |
+| 13/Jun/26 | Franco Cruz | Auditoría, ciclo de vida y parametrización del sistema (v1.10.0) | Cambios solicitados | 4 puntos que originaron la v1.11.0: checklist de implementación (Anexo A, decisión [30](#131-decisiones-confirmadas)); cuádruple de auditoría en toda tabla ([BR-20](#11-reglas-de-negocio-e-integridad-resumen-normativo), decisión [31](#131-decisiones-confirmadas)); `SYSTEM_SETTINGS` con keys conocidas, version-gating y comunicados `ANNOUNCEMENTS` (decisión [33](#131-decisiones-confirmadas)) — con investigación de BlurHash/ThumbHash; y fotos con placeholder + baja lógica por `deactivated_at` (decisiones [32](#131-decisiones-confirmadas) y [34](#131-decisiones-confirmadas)). |
+
+---
+
+## Anexo A — Checklist de implementación
+
+Lista de verificación para levantar el estándar en un proyecto nuevo. No reemplaza al documento — cada ítem enlaza a la sección que lo explica; acá solo se garantiza que **nada quede afuera**. El *cómo exacto* —comandos, DDL, configuración— vive en el documento técnico (v2).
+
+**0 · Infraestructura y Supabase**
+- [ ] **SMTP propio en producción** — el SMTP de prueba de Supabase no sirve para producción; sin esto no llegan los OTP ni las invitaciones ([§8.2](#82-rate-limiting-y-anti-automatización)).
+- [ ] Plantillas de email (verificación/OTP, invitación) ([§7.2](#72-bloque-común-verificación-de-email-por-otp)).
+- [ ] **CAPTCHA Cloudflare Turnstile** con sus keys ([§8.2](#82-rate-limiting-y-anti-automatización)).
+- [ ] Límites de **rate limiting** ajustados ([§8.2](#82-rate-limiting-y-anti-automatización)).
+- [ ] **Sesiones y tokens**: vida del JWT, rotación de refresh tokens con *reuse detection*, hook que inyecta el contexto activo en los claims ([§8](#8-contexto-activo-en-qué-empresa-sucursal-y-rol-estoy-parado), [§8.1](#81-política-de-sesiones-y-renovación-de-tokens)).
+- [ ] **Storage** para imágenes (fotos de perfil y logos) ([§6](#6-modelo-de-entidades-conceptual)).
+
+**1 · Esquema base**
+- [ ] Tablas del modelo estándar ([§6](#6-modelo-de-entidades-conceptual)).
+- [ ] **Cuádruple de auditoría** (`created_at`, `updated_at`, `created_by`, `updated_by`) y `deactivated_at` en cada tabla ([BR-20](#11-reglas-de-negocio-e-integridad-resumen-normativo), [BR-21](#11-reglas-de-negocio-e-integridad-resumen-normativo)).
+- [ ] Políticas **RLS** de las tres familias: staff, identidad propia y catálogo público ([§9.2](#92-quién-accede-las-tres-familias-de-acceso)).
+- [ ] **FKs compuestas** + `WITH CHECK` para el tenant ([BR-16](#11-reglas-de-negocio-e-integridad-resumen-normativo)).
+- [ ] Triggers de integridad: rol/sucursal de la misma empresa, regla Owner-admin, una transferencia pendiente ([BR-03](#11-reglas-de-negocio-e-integridad-resumen-normativo), [BR-04](#11-reglas-de-negocio-e-integridad-resumen-normativo), [BR-17](#11-reglas-de-negocio-e-integridad-resumen-normativo)).
+- [ ] Entidad de **auditoría** (log de eventos) (decisión [17](#131-decisiones-confirmadas)).
+
+**2 · Datos semilla**
+- [ ] Catálogo de **permisos** (`modulo.accion`) ([§5.1](#51-cómo-se-compone-el-acceso)).
+- [ ] Rol **`admin`** e `initial setup` ([§5.2](#52-roles-por-defecto-admin-y-el-concepto-de-owner), [§7.3](#73-camino-a--registro-por-cuenta-propia-e-initial-setup)).
+- [ ] Roles plantilla del rubro, opcional ([§5.2](#52-roles-por-defecto-admin-y-el-concepto-de-owner)).
+- [ ] **Keys conocidas** de `SYSTEM_SETTINGS`: versión por plataforma, URLs de tiendas/web, soporte y legales ([§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides)).
+
+**3 · Por proyecto (cada sistema)**
+- [ ] Catálogo de permisos propio del dominio ([§5.1](#51-cómo-se-compone-el-acceso)).
+- [ ] Tablas operativas con `company_id`/`branch_id` + auditoría ([§9.4](#94-tablas-operativas-y-la-columna-de-tenant-análisis-de-normalización), [BR-11](#11-reglas-de-negocio-e-integridad-resumen-normativo)).
+- [ ] Comunicados (`ANNOUNCEMENTS`) y `maintenance_mode` si el proyecto los usa ([§6](#6-modelo-de-entidades-conceptual), [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides)).
+
+**4 · Antes de producción**
+- [ ] Verificar que **el código no filtra por empresa** — todo el aislamiento por RLS (principio 2).
+- [ ] Probar los cuatro caminos de alta: A, B y C (staff) y D (usuario final) ([§7](#7-flujos-de-incorporación-de-usuarios)).
+- [ ] Probar el version-gating (forzado/suave) y un comunicado de prueba ([§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides)).
