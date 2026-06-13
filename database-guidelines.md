@@ -1,7 +1,7 @@
 # Estandarización de Roles y Permisos — Eurekant LLC
 
-> **Versión:** 1.6.0 (conceptual — sin SQL)
-> **Fecha:** 10/06/2026
+> **Versión:** 1.7.0 (conceptual — sin SQL)
+> **Fecha:** 11/Jun/2026
 > **Estado:** Borrador para validación interna
 > **Alcance:** Todos los proyectos de software desarrollados por Eurekant
 
@@ -78,8 +78,8 @@ El estándar completo se compone de **dos documentos separados**:
 Las razones de la separación:
 
 1. **Audiencias y ritmos de cambio distintos.** Un PM o una diseñadora necesitan entender los flujos y las reglas, no cómo están armadas las tablas; incluso un desarrollador suele querer primero la lógica a alto nivel. Además, este documento cambia cuando cambia una regla de negocio (poco frecuente, lo aprueba la dirección), mientras que el técnico cambiará con cada migración o ajuste de implementación (frecuente, lo aprueba el líder técnico). Mezclados, cada cambio de un índice obligaría a revisar a quienes no les aporta nada, y las reglas de negocio quedarían enterradas entre SQL.
-2. **Una sola fuente de verdad por tema.** Las reglas y su porqué viven únicamente acá; el documento técnico las implementa y las **cita** (ej: "estas FKs compuestas implementan RN-16"), nunca las re-explica. Si ambos documentos explicaran lo mismo con sus propias palabras, tarde o temprano se contradicen.
-3. **Trazabilidad verificable.** El documento técnico incluirá una tabla de mapeo —cada RN y cada decisión confirmada → los objetos de base de datos que la implementan— y declarará qué versión de este documento implementa, para poder auditar que ninguna regla quedó solo en el papel.
+2. **Una sola fuente de verdad por tema.** Las reglas y su porqué viven únicamente acá; el documento técnico las implementa y las **cita** (ej: "estas FKs compuestas implementan BR-16"), nunca las re-explica. Si ambos documentos explicaran lo mismo con sus propias palabras, tarde o temprano se contradicen.
+3. **Trazabilidad verificable.** El documento técnico incluirá una tabla de mapeo —cada BR y cada decisión confirmada → los objetos de base de datos que la implementan— y declarará qué versión de este documento implementa, para poder auditar que ninguna regla quedó solo en el papel.
 
 > 💡 **Ejemplo práctico — la analogía del plano**
 > Es la lógica de un proyecto de arquitectura. Este documento es el **render más la memoria descriptiva**: cuántos ambientes tiene la casa, por qué la cocina da al patio. Lo entienden el cliente, la municipalidad y el constructor. El documento técnico es el **plano de estructura e instalaciones**: el calibre de las varillas y por dónde van los caños — solo lo leen los que construyen. Nadie le pide al cliente que apruebe el diámetro de una cañería, y el constructor no re-decide cuántos dormitorios hay: eso ya lo fijó la memoria descriptiva.
@@ -91,7 +91,7 @@ Las razones de la separación:
 1. **Multi-tenant siempre.** Todo sistema soporta múltiples empresas y múltiples sucursales por empresa, **aunque el cliente actual no lo necesite**. Si el software se vende a un solo cliente con una sola sucursal, internamente igual existen `COMPANIES` y `BRANCHES` con un único registro. Esto garantiza escalabilidad sin migraciones traumáticas.
 2. **Aislamiento por RLS, no por filtros.** El código de aplicación **nunca** filtra por empresa/sucursal en sus queries. La base de datos (Row Level Security) devuelve únicamente los datos a los que el usuario tiene acceso según su contexto activo.
 3. **Roles a nivel empresa, asignaciones a nivel sucursal.** Un rol se define una vez por empresa y se reutiliza en todas sus sucursales. La asignación concreta de un usuario es siempre `usuario + rol + sucursal`.
-4. **Permisos granulares.** Un rol no es una etiqueta mágica que el código interpreta: es un **conjunto de permisos** tomados de un catálogo definido por cada sistema. Este es el modelo **RBAC** (*Role-Based Access Control*, control de acceso basado en roles): los permisos nunca se asignan directamente a los usuarios, sino a roles, y los usuarios obtienen sus permisos al recibir roles. En este estándar, los permisos efectivos en cada momento son únicamente los del rol del contexto activo, nunca la suma de todos los roles del usuario (ver §8 y RN-15). Es el modelo clásico que usan Slack, Notion o AWS.
+4. **Permisos granulares.** Un rol no es una etiqueta mágica que el código interpreta: es un **conjunto de permisos** tomados de un catálogo definido por cada sistema. Este es el modelo **RBAC** (*Role-Based Access Control*, control de acceso basado en roles): los permisos nunca se asignan directamente a los usuarios, sino a roles, y los usuarios obtienen sus permisos al recibir roles. En este estándar, los permisos efectivos en cada momento son únicamente los del rol del contexto activo, nunca la suma de todos los roles del usuario (ver §8 y BR-15). Es el modelo clásico que usan Slack, Notion o AWS.
 5. **Identidad global única.** Una persona tiene **una sola cuenta** (un email) y con ella puede pertenecer a N empresas y N sucursales con distintos roles.
 6. **Nada se borra, se desactiva.** Usuarios, roles y vínculos se desactivan (soft delete) para preservar el historial y la auditoría.
 7. **El superadmin vive fuera del modelo de empresas.** Es la capa de los dueños del software, con su propio panel y su propia parametrización global.
@@ -120,10 +120,11 @@ Las razones de la separación:
 | **OTP** | *One-Time Password* (contraseña de un solo uso): código de 6 dígitos enviado por email para verificar la propiedad de la casilla durante el registro. (ver §7.2). |
 | **Enumeración de cuentas** | Ataque que consiste en probar emails ajenos en pantallas públicas (registro, invitaciones) para descubrir quién tiene cuenta en el sistema, a partir de diferencias en la respuesta. Se previene respondiendo siempre lo mismo y revelando información solo a quien verificó la casilla (ver §7.3 y §12). |
 | **Initial setup** | Función interna que popula los datos iniciales al crear una empresa (ver §7.3). |
-| **Tabla operativa** | Toda tabla que guarda datos del dominio de negocio de cada sistema (productos, ventas, turnos, stock, cajas, etc.). Se contrapone a las tablas del modelo estándar (`USERS`, `COMPANIES`, `ROLES`, …) y a los catálogos globales sin tenant (`PERMISSIONS`, `SYSTEM_SETTINGS`). Siempre lleva columna de tenant (ver §9.3 y RN-11). |
+| **Tabla operativa** | Toda tabla que guarda datos del dominio de negocio de cada sistema (productos, ventas, turnos, stock, cajas, etc.). Se contrapone a las tablas del modelo estándar (`USERS`, `COMPANIES`, `ROLES`, …) y a los catálogos globales sin tenant (`PERMISSIONS`, `SYSTEM_SETTINGS`). Siempre lleva columna de tenant (ver §9.3 y BR-11). |
 | **Rate limiting** | Límite a la cantidad de veces que una operación puede ejecutarse en una ventana de tiempo (contado por IP, por email o por proyecto, según la operación). Primera defensa contra bots, fuerza bruta y abuso de los endpoints públicos (ver §8.2). |
 | **CAPTCHA** | Desafío que distingue personas de bots en los endpoints públicos. Estándar de Eurekant: Cloudflare Turnstile, integrado nativamente en Supabase e invisible para el usuario en la gran mayoría de los casos (ver §8.2). |
 | **Override (de parámetro)** | Valor específico de una empresa o sucursal que reemplaza al valor global de un parámetro del sistema; gana siempre el más específico (ver §10.2). |
+| **BR (Business Rule)** | Regla de negocio obligatoria del estándar (BR-01…BR-17, ver §11). Mismo prefijo que usan los SRS de Eurekant. |
 
 ---
 
@@ -187,7 +188,7 @@ flowchart LR
 **Asignación.** La unidad central del modelo: `usuario + rol + sucursal`. Reglas:
 
 - Un usuario puede tener **distintos roles en distintas sucursales** de la misma empresa.
-- Un usuario también puede tener **más de un rol en la misma sucursal**; en ese caso los permisos **no se combinan**: el usuario opera con un rol a la vez según su contexto activo (ver §8 y RN-15).
+- Un usuario también puede tener **más de un rol en la misma sucursal**; en ese caso los permisos **no se combinan**: el usuario opera con un rol a la vez según su contexto activo (ver §8 y BR-15).
 - La sucursal de la asignación **debe pertenecer a la misma empresa** que el rol (regla de integridad obligatoria, ver §11).
 - Para dar acceso a todas las sucursales, se crea una asignación por sucursal (la UI puede ofrecer un atajo "aplicar a todas las sucursales", pero internamente son N asignaciones).
 
@@ -354,7 +355,7 @@ erDiagram
 
 **`USERS`** — Identidad global. Una fila por persona, vinculada al sistema de autenticación (en Supabase, referencia a `auth.users`). No contiene información de empresa: la pertenencia se expresa solo a través de `USER_ROLES`. El email es único y case-insensitive (`CITEXT`).
 
-**`COMPANIES`** — El tenant. `owner_id` marca al dueño único (ver §5.2). Todas las tablas operativas de cada sistema (productos, ventas, etc.) llevan `company_id` (RN-11, ver §9.3), porque es la columna sobre la que pivota el RLS.
+**`COMPANIES`** — El tenant. `owner_id` marca al dueño único (ver §5.2). Todas las tablas operativas de cada sistema (productos, ventas, etc.) llevan `company_id` (BR-11, ver §9.3), porque es la columna sobre la que pivota el RLS.
 
 **`BRANCHES`** — Siempre existe al menos una por empresa. Las tablas operativas que tienen alcance de sucursal (ej: stock, cajas) referencian `branch_id`.
 
@@ -370,7 +371,7 @@ erDiagram
 
 **`INVITATIONS`** — Registro completo del flujo de invitación (ver §7.4). Guarda el rol y la sucursal propuestos, los datos precargados de la persona y el estado del ciclo de vida.
 
-**`OWNERSHIP_TRANSFERS`** — Registro del flujo de transferencia de ownership (§7.8): la oferta del Owner saliente al receptor, con el mismo ciclo de vida que una invitación. Solo puede existir una pendiente por empresa (RN-17).
+**`OWNERSHIP_TRANSFERS`** — Registro del flujo de transferencia de ownership (§7.8): la oferta del Owner saliente al receptor, con el mismo ciclo de vida que una invitación. Solo puede existir una pendiente por empresa (BR-17).
 
 **`SUPERADMINS`** — Lista blanca de usuarios con acceso global (ver §10). Deliberadamente fuera del modelo de roles de empresa.
 
@@ -521,10 +522,11 @@ Notas:
 - En ambos escenarios el resultado intermedio es el mismo: una fila en `INVITATIONS` con empresa, sucursal, rol, email y quién invita. Lo que cambia es lo que pasa después de la pantalla de confirmación: en el camino B la persona se registra (o rechaza); en el camino C acepta (o rechaza). En **ningún caso** la invitación se acepta automáticamente: la persona siempre ve el detalle y decide (§7.5).
 - La **verificación de existencia** del email debe hacerse de forma segura: el sistema responde internamente si existe o no para ajustar el formulario, pero **no debe exponer** a cualquier usuario una API que permita enumerar qué emails tienen cuenta (punto de fuga clásico, ver §12).
 - Para el usuario existente **no se piden datos personales** porque ya existen en su cuenta; solo se elige sucursal y rol.
+- **Invitar a varias personas** es simplemente crear N invitaciones, una fila cada una: no existe estructura especial de "lote" en el modelo. Si algún sistema necesita una pantalla de invitación masiva (ej: importar un CSV), es funcionalidad de producto sobre este mismo mecanismo (decisión 18).
 
 ### 7.5 Ciclo de vida de una invitación
 
-Antes de ver los dos desenlaces (caminos B y C), los estados por los que puede pasar una invitación:
+Antes de ver los dos desenlaces (caminos B y C), los estados por los que puede pasar una invitación — el mismo ciclo de vida que después reutilizan las transferencias de ownership (§7.8):
 
 ```mermaid
 stateDiagram-v2
@@ -598,7 +600,7 @@ flowchart LR
     A["📧 Click en<br/>'Ver invitación'"] --> B["Login<br/>(si no tiene sesión activa)"]
     B --> C["Pantalla de confirmación:<br/>quién invita, a qué empresa,<br/>a qué sucursal y con qué rol"]
     C --> D{"¿Qué decide?"}
-    D -- "Acepta" --> E["Validaciones: invitación vigente,<br/>rol y sucursal activos (RN-07)"]
+    D -- "Acepta" --> E["Validaciones: invitación vigente,<br/>rol y sucursal activos (BR-07)"]
     E --> F["Se crea USER_ROLES:<br/>usuario + rol + sucursal"]
     F --> G["✅ Acceso inmediato: la empresa aparece<br/>en su selector de contexto (§8)"]
     D -- "Rechaza" --> H["INVITATIONS → rejected;<br/>se notifica al invitador (§7.5)"]
@@ -606,7 +608,7 @@ flowchart LR
 
 - **Nada se acepta automáticamente:** el click del email no crea ninguna asignación — lleva a una pantalla de confirmación con el detalle completo de la invitación, y ahí la persona decide aceptar o rechazar.
 - No hay OTP ni formulario de datos: la persona ya verificó su email al crear su cuenta y sus datos personales ya existen. Solo necesita login si no tenía sesión abierta.
-- **Si acepta:** el sistema valida que la invitación siga vigente y que el rol y la sucursal sigan activos (RN-07); se crea la asignación `USER_ROLES` y la nueva empresa/sucursal aparece de inmediato en su selector de contexto (§8), sin cerrar sesión. Si algo fue desactivado en el medio, la invitación se invalida y se notifica a ambas partes.
+- **Si acepta:** el sistema valida que la invitación siga vigente y que el rol y la sucursal sigan activos (BR-07); se crea la asignación `USER_ROLES` y la nueva empresa/sucursal aparece de inmediato en su selector de contexto (§8), sin cerrar sesión. Si algo fue desactivado en el medio, la invitación se invalida y se notifica a ambas partes.
 - **Si rechaza:** la invitación pasa a estado Rechazada y se notifica al invitador (§7.5). Si fue un error, el invitador crea una nueva.
 
 ### 7.8 Transferencia de ownership
@@ -619,23 +621,23 @@ flowchart TD
     B --> C["📧 El receptor recibe la oferta:<br/>'Carlos te ofrece ser Owner<br/>de Pizzería Don Carlo'"]
     C --> D["Pantalla de confirmación:<br/>detalle de lo que implica ser Owner"]
     D --> E{"¿Qué decide?"}
-    E -- "Acepta" --> F["Transacción única:<br/>1. El receptor pasa a ser Owner<br/>2. Recibe el rol admin si no lo tenía (RN-03)<br/>3. El saliente conserva su rol admin"]
+    E -- "Acepta" --> F["Transacción única:<br/>1. El receptor pasa a ser Owner<br/>2. Recibe el rol admin si no lo tenía (BR-03)<br/>3. El saliente conserva su rol admin"]
     F --> G["✅ Nuevo Owner;<br/>se notifica a ambas partes"]
     E -- "Rechaza" --> H["Transferencia → rechazada;<br/>se notifica al Owner"]
     B -.->|"El Owner puede revocarla<br/>mientras esté pendiente"| I["Transferencia → revocada"]
 ```
 
-Reglas (RN-17):
+Reglas (BR-17):
 
 - **El receptor debe ser un usuario activo de la empresa.** Para transferir a alguien de afuera, primero se lo invita (caminos B/C) y, una vez dentro, se le transfiere. Así no hace falta un flujo híbrido "invitación + transferencia".
-- **Confirmación obligatoria del receptor:** ser Owner implica responsabilidades (es el respaldo administrativo de la empresa, RN-03), y nadie las recibe sin aceptarlas. Misma filosofía que la decisión 11: nada se acepta en nombre de otro.
+- **Confirmación obligatoria del receptor:** ser Owner implica responsabilidades (es el respaldo administrativo de la empresa, BR-03), y nadie las recibe sin aceptarlas. Misma filosofía que la decisión 11: nada se acepta en nombre de otro.
 - **Una sola transferencia de ownership pendiente por empresa.** Si el Owner ofreciera el título a dos personas y ambas aceptaran, ¿quién es el dueño? Para que ese conflicto sea imposible, la oferta vigente debe resolverse (aceptada, rechazada, expirada o revocada) antes de poder iniciar otra.
-- **El Owner saliente conserva el rol admin:** deja de ser el dueño pero no pierde el acceso; queda como un admin común — renunciable o removible como cualquier otro (RN-03). El nuevo Owner decide si ajusta sus roles después.
-- **Mismo ciclo de vida que una invitación** (§7.5): pendiente → aceptada / rechazada / expirada / revocada. Expira a los 7 días (parametrizable) y el Owner puede revocarla mientras esté pendiente. Única diferencia con las invitaciones: una transferencia expirada **no se reenvía** — el Owner inicia una nueva (mismo efecto, sin estados extra).
+- **El Owner saliente conserva el rol admin:** deja de ser el dueño pero no pierde el acceso; queda como un admin común — renunciable o removible como cualquier otro (BR-03). El nuevo Owner decide si ajusta sus roles después.
+- **Mismo ciclo de vida que una invitación** (§7.5): pendiente → aceptada / rechazada / expirada / revocada. Expira a los 7 días (parametrizable) y el Owner puede revocarla mientras esté pendiente. Única diferencia: una transferencia expirada **no se reenvía** — el Owner inicia una nueva. ¿Por qué la asimetría? El reenvío de invitaciones existe para no recargar datos (rol, sucursal, datos personales precargados) y re-disparar un email perdido; la transferencia solo tiene dos datos —empresa y receptor—, así que "reenviar" y "crear una nueva" serían el mismo botón. Y que cada oferta sea un registro nuevo y cerrado deja una auditoría inequívoca para un acto tan consecuente: *"ofreció el 10/06, expiró; volvió a ofrecer el 20/06, aceptada"*.
 - **Atomicidad:** la aceptación se ejecuta como transacción única en la base — cambio de Owner y rol admin del receptor, todo o nada (como el *initial setup*, §7.3).
 
 > 💡 **Ejemplo práctico — la venta de la pizzería**
-> Carlos vende Pizzería Don Carlo a su socio Diego. Desde la configuración inicia la transferencia; Diego recibe el aviso y la acepta: ahora Diego es Owner (ya era admin, así que sus roles no cambian) y Carlos sigue siendo admin — útil durante la transición. Tres meses después Carlos renuncia a su rol admin y queda fuera de la empresa: ahora que no es Owner, RN-03 ya no lo protege ni lo retiene. Si en cambio Diego hubiera dejado pasar los 7 días sin responder, la transferencia expiraba y Carlos seguía siendo el dueño — el título nunca queda en el aire.
+> Carlos vende Pizzería Don Carlo a su socio Diego. Desde la configuración inicia la transferencia; Diego recibe el aviso y la acepta: ahora Diego es Owner (ya era admin, así que sus roles no cambian) y Carlos sigue siendo admin — útil durante la transición. Tres meses después Carlos renuncia a su rol admin y queda fuera de la empresa: ahora que no es Owner, BR-03 ya no lo protege ni lo retiene. Si en cambio Diego hubiera dejado pasar los 7 días sin responder, la transferencia expiraba y Carlos seguía siendo el dueño — el título nunca queda en el aire.
 
 ---
 
@@ -658,7 +660,7 @@ flowchart TD
 Reglas:
 
 - Si el usuario tiene **una sola** asignación activa, el contexto se establece solo, sin pantalla intermedia (el caso más común: empleados de una sola empresa no deben enterarse de que el sistema es multi-tenant).
-- El selector muestra cada asignación como `empresa / sucursal / rol`. Si el usuario tiene **más de un rol en la misma sucursal**, cada uno aparece como una entrada separada: **los permisos no se combinan** — el usuario opera con un rol a la vez y sus permisos efectivos son exactamente los del rol activo (RN-15). Para usar otro de sus roles, cambia de contexto.
+- El selector muestra cada asignación como `empresa / sucursal / rol`. Si el usuario tiene **más de un rol en la misma sucursal**, cada uno aparece como una entrada separada: **los permisos no se combinan** — el usuario opera con un rol a la vez y sus permisos efectivos son exactamente los del rol activo (BR-15). Para usar otro de sus roles, cambia de contexto.
 - El contexto activo (y los permisos del rol activo) se materializa en los **claims del token de sesión (JWT)**, para que el RLS pueda evaluarlo sin subconsultas costosas. Este es el patrón recomendado por Supabase y la industria.
 - Cambiar de contexto refresca el token con los nuevos claims (`refreshSession()`, ver §8.1). No requiere cerrar sesión.
 - El sistema recuerda el último contexto usado para preseleccionarlo en el próximo login.
@@ -669,7 +671,7 @@ Reglas:
 > **¿Cómo funciona esa firma?** El token tiene tres partes: `cabecera.datos.firma`. Los datos (los claims) **no están cifrados** — cualquiera con el token puede leerlos. Lo que los protege es la firma: el servidor la calcula pasando el contenido exacto del token por una función matemática junto con una **clave secreta que nunca sale del servidor**. Cualquier cambio en los datos, por mínimo que sea, produce una firma completamente distinta. Si alguien edita los claims, el contenido ya no coincide con la firma y la base rechaza el token entero — y el atacante no puede recalcular la firma correcta porque no tiene la clave. Como un cheque: cualquiera lee el monto, pero alterarlo se nota, y no se puede volver a firmar con la firma de otro.
 
 > 💡 **Ejemplo práctico — multi-rol sin combinación de permisos**
-> En el sistema de turnos de la clínica, la Dra. Paredes tiene dos roles en la misma sucursal: **Profesional** (atiende turnos y carga evoluciones en las historias clínicas de sus pacientes) y **Directora médica** (ve reportes, aprueba reintegros y accede a historias clínicas de otros profesionales). Atendiendo pacientes opera como Profesional: no ve reportes ni historias ajenas, aunque "tenga" el otro rol. Para la revisión mensual cambia su contexto a Directora médica. La ventaja es doble: **separación de funciones** — sus tareas cotidianas no cargan privilegios elevados, el mismo principio por el que un administrador de sistemas no usa root para el día a día — y **auditoría inequívoca** (RN-14): si aprueba un reintegro o corrige una historia clínica ajena, el registro (`created_by`/`updated_by` → `USER_ROLES`) muestra que lo hizo actuando como Directora médica, no como Profesional.
+> En el sistema de turnos de la clínica, la Dra. Paredes tiene dos roles en la misma sucursal: **Profesional** (atiende turnos y carga evoluciones en las historias clínicas de sus pacientes) y **Directora médica** (ve reportes, aprueba reintegros y accede a historias clínicas de otros profesionales). Atendiendo pacientes opera como Profesional: no ve reportes ni historias ajenas, aunque "tenga" el otro rol. Para la revisión mensual cambia su contexto a Directora médica. La ventaja es doble: **separación de funciones** — sus tareas cotidianas no cargan privilegios elevados, el mismo principio por el que un administrador de sistemas no usa root para el día a día — y **auditoría inequívoca** (BR-14): si aprueba un reintegro o corrige una historia clínica ajena, el registro (`created_by`/`updated_by` → `USER_ROLES`) muestra que lo hizo actuando como Directora médica, no como Profesional.
 
 ### 8.1 Política de sesiones y renovación de tokens
 
@@ -749,7 +751,7 @@ flowchart LR
 - **Trade-off conocido:** el token es una **foto** de los permisos, tomada al armar el contexto activo. Se gana velocidad (la base no consulta las tablas de roles en cada query) a cambio de inmediatez: un cambio de rol o de permisos no se refleja en los tokens ya emitidos hasta que expiran y se renuevan (hasta 1 hora con el valor estándar, ver §8.1). Por eso los tokens son de **vida corta**, y las acciones críticas (desactivar un usuario, suspender una empresa) se complementan con verificación en base, que aplica al instante. Es la decisión estándar de la industria (Supabase, Auth0, Firebase): la alternativa — verificar todo en base en cada query — elimina esa ventana de minutos al costo del rendimiento de todo el sistema, todo el tiempo. La política completa de duración y renovación de tokens está en §8.1.
 
 > 💡 **Ejemplo práctico — el cajero desvinculado**
-> Despiden a un cajero a las 10:00 y el admin lo desactiva al instante. Su token vigente puede seguir siendo válido hasta las 11:00 (vida estándar de 1 hora, §8.1): durante esa ventana, su "credencial" todavía dice *Cajero de la sucursal Centro*. Para las operaciones comunes esa ventana es tolerable y se cierra sola. Para lo crítico no se espera: la baja del usuario también se verifica en base (RN-08: pierde acceso de inmediato), igual que la suspensión de una empresa (`COMPANIES.is_active = false` corta el acceso vía RLS al instante).
+> Despiden a un cajero a las 10:00 y el admin lo desactiva al instante. Su token vigente puede seguir siendo válido hasta las 11:00 (vida estándar de 1 hora, §8.1): durante esa ventana, su "credencial" todavía dice *Cajero de la sucursal Centro*. Para las operaciones comunes esa ventana es tolerable y se cierra sola. Para lo crítico no se espera: la baja del usuario también se verifica en base (BR-08: pierde acceso de inmediato), igual que la suspensión de una empresa (`COMPANIES.is_active = false` corta el acceso vía RLS al instante).
 
 ### 9.3 Tablas operativas y la columna de tenant: análisis de normalización
 
@@ -759,9 +761,9 @@ flowchart LR
 |---|---|---|
 | Tablas del modelo estándar | `USERS`, `COMPANIES`, `BRANCHES`, `ROLES`, `USER_ROLES`, `INVITATIONS` | Según su rol en el modelo (definido en §6) |
 | Catálogos globales | `PERMISSIONS`, `SYSTEM_SETTINGS` | No: son datos del sistema, no de las empresas |
-| **Tablas operativas** | `PRODUCTS`, `ORDERS`, turnos, stock, cajas… | **Sí, siempre** (RN-11): `company_id`, más `branch_id` si su alcance es por sucursal |
+| **Tablas operativas** | `PRODUCTS`, `ORDERS`, turnos, stock, cajas… | **Sí, siempre** (BR-11): `company_id`, más `branch_id` si su alcance es por sucursal |
 
-**La decisión de diseño.** RN-11 exige `company_id` en toda tabla operativa **incluso cuando el tenant es derivable transitivamente** a través de sus relaciones (ej: una row de la tabla de ventas podría llegar a la empresa vía `ORDER_ITEMS` → `ORDERS` → `company_id`). Esto es **desnormalización deliberada**, y el análisis que la justifica queda documentado acá.
+**La decisión de diseño.** BR-11 exige `company_id` en toda tabla operativa **incluso cuando el tenant es derivable transitivamente** a través de sus relaciones (ej: una row de la tabla de ventas podría llegar a la empresa vía `ORDER_ITEMS` → `ORDERS` → `company_id`). Esto es **desnormalización deliberada**, y el análisis que la justifica queda documentado acá.
 
 *A favor de la columna redundante:*
 
@@ -773,11 +775,11 @@ flowchart LR
 *En contra:*
 
 - **Espacio:** un UUID son 16 bytes por fila, más su índice. Real pero despreciable frente al costo de las alternativas.
-- **Riesgo de inconsistencia:** una fila podría quedar marcada con una empresa mientras sus relaciones apuntan a datos de otra. Es la única contra seria, y se elimina de forma declarativa (ver más abajo, RN-16).
+- **Riesgo de inconsistencia:** una fila podría quedar marcada con una empresa mientras sus relaciones apuntan a datos de otra. Es la única contra seria, y se elimina de forma declarativa (ver más abajo, BR-16).
 
 **Por qué la objeción de normalización pesa menos acá.** Las anomalías que la normalización previene son de **actualización**: datos redundantes que divergen cuando uno cambia y el otro no. Pero el `company_id` de una fila operativa es **inmutable** — una venta jamás se muda de empresa. Lo mismo aplica a `branch_id`: en las filas operativas también se trata como inmutable; un traslado entre sucursales (ej: stock) se modela como un movimiento nuevo — baja en una, alta en la otra — y no como un UPDATE de la columna, lo que además preserva el historial (principio 6). Eliminado el riesgo de actualización, lo único que queda es el riesgo de **inserción incorrecta**, que se resuelve con constraints:
 
-**Prevención de inconsistencias (RN-16).** La consistencia del tenant no depende de la disciplina del programador sino de tres capas que la base de datos impone sola:
+**Prevención de inconsistencias (BR-16).** La consistencia del tenant no depende de la disciplina del programador sino de tres capas que la base de datos impone sola:
 
 1. **FKs compuestas.** La tabla padre declara una unicidad que incluye el tenant (ej: `UNIQUE (company_id, order_id)` en `ORDERS`) y la tabla hija referencia con FK compuesta: `FOREIGN KEY (company_id, order_id) REFERENCES ORDERS (company_id, order_id)`. Con esto es **estructuralmente imposible** insertar una fila que mezcle tenants: si el `company_id` de la hija no coincide con el del padre, la FK no matchea y Postgres rechaza la operación.
 2. **La columna nunca la escribe la aplicación.** `company_id` (y `branch_id`) se completan con un `DEFAULT` que lee el contexto activo de los claims del JWT. El código de aplicación no pasa el valor, igual que no filtra por él (principio 2).
@@ -830,7 +832,7 @@ Capacidades del superadmin (lista inicial, ampliable por sistema):
 
 Todo valor del sistema que pueda cambiar sin redeploy se guarda como parámetro, editable desde el panel superadmin: comisiones (ej: `mercadopago.commission`), días de expiración de invitaciones (`invitations.expiration_days`), límites, textos legales, banderas de funcionalidades, etc.
 
-**Catálogo con metadatos, no solo clave-valor.** Cada parámetro tiene una ficha que declara: el tipo de dato y su rango válido (nadie puede guardar "banana" donde iba un número), el valor por defecto, **hasta qué nivel admite override** y **quién puede editarlo**. Por defecto todo se edita solo desde el panel superadmin; si la ficha lo habilita, un admin de empresa podría editar el override de su propia empresa desde la app (nunca el valor global). No es solo la lista de precios: es la lista de precios más las reglas de quién puede hacer descuentos y sobre qué productos — la comisión es negociable por cliente; los parámetros de seguridad (ej: los intentos máximos de OTP, §8.2) se marcan como solo-globales y no los pisa nadie.
+**Catálogo con metadatos, no solo clave-valor.** Cada parámetro tiene una ficha que declara: el tipo de dato y su rango válido (nadie puede guardar "banana" donde iba un número), el valor por defecto, **hasta qué nivel admite override**, **quién puede editarlo** y si sus cambios exigen **doble aprobación**. Por defecto todo se edita solo desde el panel superadmin; si la ficha lo habilita, un admin de empresa podría editar el override de su propia empresa desde la app (nunca el valor global). No es solo la lista de precios: es la lista de precios más las reglas de quién puede hacer descuentos y sobre qué productos — la comisión es negociable por cliente; los parámetros de seguridad (ej: los intentos máximos de OTP, §8.2) se marcan como solo-globales y no los pisa nadie.
 
 **Cascada global → empresa → sucursal.** Un parámetro tiene su valor general y, donde se haya negociado o configurado, un valor específico: **gana siempre el más específico**. La lectura pasa por una única función (`fn_get_setting` en la v2): ningún código consulta las tablas de settings directamente — como preguntar en recepción en vez de revolver el archivo; si mañana la cascada cambia, se ajusta un solo lugar.
 
@@ -848,7 +850,8 @@ Por qué este diseño escala bien:
 - **Parámetro nuevo** = una fila más en el catálogo — sin cambiar tablas, sin redeploy.
 - **Empresa nueva** = cero configuración: hereda todos los valores globales automáticamente.
 - **Los overrides son escasos por naturaleza:** 1.000 empresas × 50 parámetros no genera 50.000 filas — solo existen las excepciones realmente negociadas.
-- **Todo cambio queda auditado:** modificar un parámetro o un override es un evento sensible y se registra en el log de auditoría (decisión 17).
+- **Todo cambio queda auditado, con motivo obligatorio:** el log registra quién, cuándo, valor anterior, valor nuevo y un **comentario obligatorio** explicando el porqué (decisiones 17 y 22). *"Comisión: 6,4% → 6,8%"* es un dato; con *"MP actualizó su tarifa, comunicado del 12/07"* es una explicación que alguien va a agradecer años después.
+- **Doble aprobación para parámetros críticos (opcional):** la ficha puede exigir que el cambio quede pendiente hasta que un **segundo superadmin** lo confirme — pensado para los parámetros que mueven dinero, como las comisiones. La bandera viene apagada por defecto, porque muchos proyectos operan con un solo superadmin (decisión 22).
 
 > 💡 **Ejemplo práctico — comisiones de Mercado Pago**
 > El sistema de la pizzería cobra las ventas online con Mercado Pago. MP cambia su comisión del 6,4% al 6,8%. Sin este modelo, habría que tocar código y redeployar. Con `SYSTEM_SETTINGS`, el superadmin entra al back-office, edita `mercadopago.commission` y el cambio aplica al instante en todos los cálculos. Queda registrado quién lo cambió y cuándo.
@@ -860,27 +863,27 @@ Por qué este diseño escala bien:
 
 ## 11. Reglas de negocio e integridad (resumen normativo)
 
-Estas reglas son **obligatorias** en todos los proyectos. En la v2, cada una se implementará con constraints, triggers o funciones.
+Estas reglas son **obligatorias** en todos los proyectos. Usan el prefijo **BR** (*Business Rule*), la misma convención que los SRS de Eurekant. En la v2, cada una se implementará con constraints, triggers o funciones.
 
 | # | Regla |
 |---|---|
-| RN-01 | Toda empresa tiene al menos una sucursal, siempre (la crea el *initial setup*). |
-| RN-02 | El rol `admin` existe en toda empresa, tiene todos los permisos del catálogo (evaluación dinámica) y no puede modificarse ni eliminarse. |
-| RN-03 | **Regla Owner-admin:** toda empresa tiene exactamente un Owner, que siempre tiene el rol admin. Nadie —ni él mismo— puede quitarle el rol ni desactivarlo; la única salida es transferir primero la propiedad (RN-17, §7.8), tras lo cual conserva el rol admin como un admin común. Como consecuencia, una empresa nunca queda sin administrador; los demás admins sí pueden renunciar o ser removidos. |
-| RN-04 | En `USER_ROLES`, la sucursal y el rol deben pertenecer a la **misma empresa**. |
-| RN-05 | La combinación `usuario + rol + sucursal` es única (no se duplica una asignación). |
-| RN-06 | No se puede eliminar un rol con asignaciones activas; primero se reasignan los usuarios. Toda eliminación es soft delete. |
-| RN-07 | Una invitación pendiente es única por `email + empresa`; expira (parametrizable, default 7 días); es revocable por el invitador y **rechazable por la persona invitada** (siempre media una pantalla de confirmación, nunca se acepta automáticamente); y al aceptarse valida que el rol y la sucursal sigan activos. |
-| RN-08 | La baja de un usuario de una empresa es soft delete: pierde acceso de inmediato, el historial queda intacto y puede reactivarse. |
-| RN-09 | El email de un usuario es único y case-insensitive a nivel global del sistema. |
-| RN-10 | Los nombres de rol y de sucursal son únicos **dentro de su empresa** (case-insensitive). |
-| RN-11 | Toda tabla operativa lleva `company_id` (y `branch_id` si su alcance es por sucursal), con RLS activo e índices sobre esas columnas. Sin excepciones (análisis y justificación en §9.3). |
-| RN-12 | El catálogo `PERMISSIONS` solo lo modifica el equipo de desarrollo (datos semilla); las empresas no lo editan. |
-| RN-13 | El acceso superadmin se define en políticas explícitas y auditables, nunca como bypass genérico. |
-| RN-14 | Los campos de auditoría (`created_by`, `updated_by`) referencian `USER_ROLES`, no `USERS`, para congelar el contexto (quién, con qué rol, en qué sucursal). |
-| RN-15 | Un usuario puede tener varios roles en la misma sucursal, pero los permisos **nunca se combinan**: se opera bajo un único rol a la vez — el contexto activo incluye el rol (ver §8). |
-| RN-16 | **Prevención de inconsistencia de tenant:** las relaciones entre tablas operativas usan FKs compuestas que incluyen el tenant; `company_id`/`branch_id` nunca los escribe la aplicación (se completan por defecto desde los claims del contexto activo); y toda política RLS de inserción/actualización incluye `WITH CHECK` contra el contexto activo (ver §9.3). |
-| RN-17 | **Transferencia de ownership con confirmación:** requiere la aceptación explícita del receptor, que debe ser un usuario activo de la empresa (al aceptar recibe el rol admin si no lo tenía). Solo puede existir una transferencia pendiente por empresa; es revocable mientras esté pendiente y expira (parametrizable, default 7 días; una expirada no se reenvía — se inicia una nueva). El Owner saliente conserva el rol admin. La aceptación es una transacción única (§7.8). |
+| BR-01 | Toda empresa tiene al menos una sucursal, siempre (la crea el *initial setup*). |
+| BR-02 | El rol `admin` existe en toda empresa, tiene todos los permisos del catálogo (evaluación dinámica) y no puede modificarse ni eliminarse. |
+| BR-03 | **Regla Owner-admin:** toda empresa tiene exactamente un Owner, que siempre tiene el rol admin. Nadie —ni él mismo— puede quitarle el rol ni desactivarlo; la única salida es transferir primero la propiedad (BR-17, §7.8), tras lo cual conserva el rol admin como un admin común. Como consecuencia, una empresa nunca queda sin administrador; los demás admins sí pueden renunciar o ser removidos. |
+| BR-04 | En `USER_ROLES`, la sucursal y el rol deben pertenecer a la **misma empresa**. |
+| BR-05 | La combinación `usuario + rol + sucursal` es única (no se duplica una asignación). |
+| BR-06 | No se puede eliminar un rol con asignaciones activas; primero se reasignan los usuarios. Toda eliminación es soft delete. |
+| BR-07 | Una invitación pendiente es única por `email + empresa`; expira (parametrizable, default 7 días); es revocable por el invitador y **rechazable por la persona invitada** (siempre media una pantalla de confirmación, nunca se acepta automáticamente); y al aceptarse valida que el rol y la sucursal sigan activos. |
+| BR-08 | La baja de un usuario de una empresa es soft delete: pierde acceso de inmediato, el historial queda intacto y puede reactivarse. |
+| BR-09 | El email de un usuario es único y case-insensitive a nivel global del sistema. |
+| BR-10 | Los nombres de rol y de sucursal son únicos **dentro de su empresa** (case-insensitive). |
+| BR-11 | Toda tabla operativa lleva `company_id` (y `branch_id` si su alcance es por sucursal), con RLS activo e índices sobre esas columnas. Sin excepciones (análisis y justificación en §9.3). |
+| BR-12 | El catálogo `PERMISSIONS` solo lo modifica el equipo de desarrollo (datos semilla); las empresas no lo editan. |
+| BR-13 | El acceso superadmin se define en políticas explícitas y auditables, nunca como bypass genérico. |
+| BR-14 | Los campos de auditoría (`created_by`, `updated_by`) referencian `USER_ROLES`, no `USERS`, para congelar el contexto (quién, con qué rol, en qué sucursal). |
+| BR-15 | Un usuario puede tener varios roles en la misma sucursal, pero los permisos **nunca se combinan**: se opera bajo un único rol a la vez — el contexto activo incluye el rol (ver §8). |
+| BR-16 | **Prevención de inconsistencia de tenant:** las relaciones entre tablas operativas usan FKs compuestas que incluyen el tenant; `company_id`/`branch_id` nunca los escribe la aplicación (se completan por defecto desde los claims del contexto activo); y toda política RLS de inserción/actualización incluye `WITH CHECK` contra el contexto activo (ver §9.3). |
+| BR-17 | **Transferencia de ownership con confirmación:** requiere la aceptación explícita del receptor, que debe ser un usuario activo de la empresa (al aceptar recibe el rol admin si no lo tenía). Solo puede existir una transferencia pendiente por empresa; es revocable mientras esté pendiente y expira (parametrizable, default 7 días; una expirada no se reenvía — se inicia una nueva). El Owner saliente conserva el rol admin. La aceptación es una transacción única (§7.8). |
 
 ---
 
@@ -891,21 +894,21 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 | Escenario | Riesgo | Resolución en el modelo |
 |---|---|---|
 | Verificar si un email existe al invitar | Enumeración de cuentas: cualquiera podría descubrir qué emails usan el sistema | La verificación ocurre del lado del servidor solo para usuarios con `users.invite`, con límite de intentos. La respuesta pública nunca confirma existencia de cuentas. |
-| Invitación aceptada después de que el rol/sucursal fue eliminado | Asignación rota o acceso a algo inexistente | Validación al aceptar (RN-07): la invitación se invalida y se notifica para regenerarla. |
-| Todos los admins se van de la empresa | Empresa inaccesible para siempre | RN-03 (regla Owner-admin): el Owner siempre es admin y nadie puede quitarle el rol, así que siempre hay al menos un admin. |
-| Eliminar un rol en uso | Usuarios sin acceso de un día para el otro | RN-06: eliminación bloqueada hasta reasignar. |
+| Invitación aceptada después de que el rol/sucursal fue eliminado | Asignación rota o acceso a algo inexistente | Validación al aceptar (BR-07): la invitación se invalida y se notifica para regenerarla. |
+| Todos los admins se van de la empresa | Empresa inaccesible para siempre | BR-03 (regla Owner-admin): el Owner siempre es admin y nadie puede quitarle el rol, así que siempre hay al menos un admin. |
+| Eliminar un rol en uso | Usuarios sin acceso de un día para el otro | BR-06: eliminación bloqueada hasta reasignar. |
 | Usuario desvinculado conserva token JWT vigente | Acceso residual acotado (hasta 1 hora, §8.1) | Trade-off conocido (§9.2): tokens de vida corta + verificación en base para acciones críticas. |
-| Dos roles distintos del mismo usuario en la misma sucursal | Ambigüedad de permisos | Permitido, **sin combinar permisos**: el usuario opera con un rol a la vez; el contexto activo incluye el rol (§8, RN-15). |
+| Dos roles distintos del mismo usuario en la misma sucursal | Ambigüedad de permisos | Permitido, **sin combinar permisos**: el usuario opera con un rol a la vez; el contexto activo incluye el rol (§8, BR-15). |
 | Sistemas "chicos" que no usan sucursales | Tentación de simplificar el modelo y romper el estándar | Prohibido por principio 1: siempre existen `COMPANIES` y `BRANCHES`, aunque tengan una fila. La UI puede ocultar el concepto. |
 | Empresa suspendida (ej: falta de pago) | Usuarios siguen operando | `COMPANIES.is_active = false` corta el acceso vía RLS a todos sus miembros de inmediato, sin tocar sus asignaciones. |
 | Invitador escribe mal los datos del invitado | Datos incorrectos permanentes | La persona invitada revisa y corrige sus datos al registrarse (§7.6). |
 | Sucursal desactivada con usuarios asignados | Asignaciones colgando de algo inactivo | Las asignaciones de esa sucursal quedan inactivas en cascada lógica; si un usuario queda sin ninguna asignación activa, no puede ingresar a esa empresa. |
-| Borrado físico de usuarios | Historial y auditoría rotos | RN-08 y RN-14: soft delete + auditoría sobre `USER_ROLES`. |
-| Mismo nombre de rol en empresas distintas | Colisión de nombres | No hay colisión: la unicidad es por empresa (RN-10). |
-| Fila operativa que referencia datos de otra empresa (mezcla de tenants por bug) | Inconsistencia de datos y fuga entre tenants | RN-16: FKs compuestas + tenant desde los claims + `WITH CHECK` hacen el INSERT/UPDATE inconsistente estructuralmente imposible (§9.3). |
+| Borrado físico de usuarios | Historial y auditoría rotos | BR-08 y BR-14: soft delete + auditoría sobre `USER_ROLES`. |
+| Mismo nombre de rol en empresas distintas | Colisión de nombres | No hay colisión: la unicidad es por empresa (BR-10). |
+| Fila operativa que referencia datos de otra empresa (mezcla de tenants por bug) | Inconsistencia de datos y fuga entre tenants | BR-16: FKs compuestas + tenant desde los claims + `WITH CHECK` hacen el INSERT/UPDATE inconsistente estructuralmente imposible (§9.3). |
 | Pantalla de registro usada para descubrir si un email tiene cuenta | Enumeración de cuentas desde el registro | El OTP se envía siempre y la respuesta pública es idéntica en todos los casos; la existencia de cuenta o invitación pendiente solo se revela tras validar el OTP (§7.3). |
 | Persona invitada como usuario nuevo se registra por cuenta propia antes de aceptar | El registro por invitación operaría sobre una cuenta que ya existe | Al abrir la invitación, el sistema detecta la cuenta y convierte el flujo en el camino C: login y aceptación (§7.7). |
-| Owner inicia una transferencia y el receptor nunca responde | Título de Owner "colgado" en una oferta eterna | La transferencia expira (default 7 días) y es revocable mientras esté pendiente; el título no cambia hasta la aceptación (§7.8, RN-17). |
+| Owner inicia una transferencia y el receptor nunca responde | Título de Owner "colgado" en una oferta eterna | La transferencia expira (default 7 días) y es revocable mientras esté pendiente; el título no cambia hasta la aceptación (§7.8, BR-17). |
 | Bot intenta adivinar códigos OTP o tokens de invitación | Fuerza bruta sobre secretos cortos | Máx. 5 intentos por código (luego se invalida), límites por IP y CAPTCHA (§8.2). |
 | Usuario malicioso envía invitaciones en masa | Spam saliente que arruina la reputación del dominio de email | Tope duro diario por emisor (parámetro del sistema, default 50) y revisión a partir de 10 diarias; el emisor siempre tiene email verificado (§8.2). |
 | Atacante acumula intentos fallidos sobre el email de su víctima | Bloqueo de la cuenta ajena como ataque (DoS dirigido) | No existe el bloqueo permanente de cuentas: esperas crecientes, CAPTCHA y bloqueos temporales; la recuperación de contraseña sigue disponible (§8.2). |
@@ -916,29 +919,33 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 
 ### 13.1 Decisiones confirmadas
 
-Decisiones 1–8 validadas con Franco el 09/06/2026; decisiones 9 a 21, el 10/06/2026.
+Todas las decisiones fueron validadas con Franco Cruz en la fecha indicada.
 
-1. **Permisos granulares** con catálogo por sistema; los roles agrupan permisos.
-2. **Contexto activo seleccionable**: una cuenta global, selector de asignaciones (empresa/sucursal/rol), cambio sin re-login.
-3. **Eliminación de roles bloqueada** si hay usuarios asignados; todo soft delete.
-4. **Superadmin como modelo separado** (tabla y panel propios, fuera del modelo de empresas).
-5. **Multi-admin con Owner**: varios admins posibles; el creador queda marcado como Owner único.
-6. **Asignación solo por sucursal** (la UI puede ofrecer "aplicar a todas").
-7. **Invitaciones que expiran (7 días) y son revocables**, con estados auditables.
-8. **Baja de usuarios por desactivación** (soft delete) con historial intacto.
-9. **Multi-rol en la misma sucursal, sin combinación de permisos**: un usuario puede tener varios roles en la misma sucursal, pero cada rol mantiene sus propios permisos; se opera con un rol a la vez vía contexto activo (RN-15, §8).
-10. **Columna de tenant en toda tabla operativa** (ratifica RN-11): desnormalización deliberada a favor de RLS directo, estándar uniforme y defensa en profundidad; la consistencia se garantiza declarativamente con FKs compuestas, tenant desde los claims y `WITH CHECK` (RN-16, análisis en §9.3).
-11. **Invitaciones rechazables, con confirmación previa**: el click del email lleva siempre a una pantalla con el detalle de la invitación; la persona decide aceptar o rechazar (estado terminal Rechazada, notifica al invitador). Aplica a los caminos B y C (§7.5).
-12. **La creación de empresas pasa siempre por la pantalla de registro**, también para usuarios existentes (inician sesión dentro del flujo y el *initial setup* omite la creación del usuario); nunca desde adentro de la app, donde la persona opera en el contexto de una empresa que puede no ser suya (§7.3).
-13. **Anti-enumeración estricta en el registro, con UI transparente**: se mantiene la respuesta pública idéntica y la resolución post-OTP (§7.3); la pantalla inicial anticipa solo que el email se va a verificar (sin enumerar casos especiales) y, tras validar el OTP, cada caso detectado tiene su pantalla específica (si ya hay cuenta, se ofrece iniciar sesión). Se descartó el aviso inmediato estilo "ya tenés cuenta" (Google/GitHub), que exige mitigaciones adicionales y revela información en rubros sensibles.
-14. **Política de sesiones estándar** (§8.1): JWT de 1 hora renovado automáticamente por el SDK; sesión larga por refresh tokens rotativos con *reuse detection*; tope de sesión opcional por proyecto vía configuración de Supabase — **nunca estirando el JWT**. La librería de tokens de FlutterFlow queda retirada para Flutter nativo.
-15. **Transferencia de ownership con confirmación del receptor** (§7.8, RN-17): el receptor —usuario activo de la empresa— acepta o rechaza desde una pantalla de confirmación; una sola transferencia pendiente por empresa; el Owner saliente conserva el rol admin como admin común.
-16. **Parámetros del sistema con catálogo y cascada de overrides** (§10.2): cada parámetro declara en su ficha el tipo de dato, el default, hasta qué nivel admite override y quién lo edita; cascada global → empresa → sucursal donde gana el valor más específico, resuelta por una función única de lectura. Los tres niveles se implementan en la v2.
-17. **Auditoría formal como entidad estándar de la v2**: tabla de log inmutable (solo se agregan renglones, nunca se editan ni borran) de eventos sensibles — cambios de roles y permisos, invitaciones, transferencias de ownership, cambios de parámetros y overrides, acciones de superadmin.
-18. **Invitaciones masivas fuera del estándar de datos**: invitar por lote es funcionalidad de producto (N invitaciones individuales, una fila cada una); no requiere ni recibe estructura especial en el modelo.
-19. **Estándar de rate limiting y anti-automatización** (§8.2): límites nativos de Supabase con SMTP propio obligatorio en producción, CAPTCHA con Cloudflare Turnstile, topes de aplicación para verificación de OTP y envío de invitaciones, y prohibición del bloqueo permanente de cuentas.
-20. **El tope de sesión server-side requiere plan Pro**: los proyectos que necesiten *inactivity timeout* o sesiones con vencimiento fijo (§8.1) deben operar con plan Pro de Supabase como mínimo en producción; en Free la sesión no tiene tope server-side (aceptable si el proyecto no lo exige). El rate limiting y el CAPTCHA no dependen del plan.
-21. **El estándar se compone de dos documentos** (§1.1): este conceptual, para todas las audiencias, y un documento técnico (v2) solo para desarrollo, que cita las reglas de acá —nunca las re-explica—, mapea cada RN y decisión a los objetos que la implementan y declara qué versión conceptual implementa.
+| # | Decisión | Detalle | Validada | Ver |
+|---|---|---|---|---|
+| 1 | **Permisos granulares** | Catálogo de permisos por sistema; los roles agrupan permisos. | 09/06/2026 | §5.1 |
+| 2 | **Contexto activo seleccionable** | Una cuenta global, selector de asignaciones (empresa/sucursal/rol), cambio sin re-login. | 09/06/2026 | §8 |
+| 3 | **Eliminación de roles bloqueada** | No se elimina un rol con usuarios asignados; todo soft delete. | 09/06/2026 | §5.3, BR-06 |
+| 4 | **Superadmin como modelo separado** | Tabla y panel propios, fuera del modelo de empresas. | 09/06/2026 | §10 |
+| 5 | **Multi-admin con Owner** | Varios admins posibles; el creador queda marcado como Owner único. | 09/06/2026 | §5.2, BR-03 |
+| 6 | **Asignación solo por sucursal** | La UI puede ofrecer "aplicar a todas", pero internamente son N asignaciones. | 09/06/2026 | §5.1 |
+| 7 | **Invitaciones que expiran y son revocables** | Expiran a los 7 días (parametrizable), con estados auditables. | 09/06/2026 | §7.5, BR-07 |
+| 8 | **Baja de usuarios por desactivación** | Soft delete con historial intacto. | 09/06/2026 | BR-08 |
+| 9 | **Multi-rol sin combinación de permisos** | Un usuario puede tener varios roles en la misma sucursal, pero cada rol mantiene sus propios permisos; se opera con un rol a la vez vía contexto activo. | 10/06/2026 | §8, BR-15 |
+| 10 | **Columna de tenant en toda tabla operativa** | Ratifica BR-11: desnormalización deliberada a favor de RLS directo, estándar uniforme y defensa en profundidad; consistencia garantizada declarativamente con FKs compuestas, tenant desde los claims y `WITH CHECK`. | 10/06/2026 | §9.3, BR-11, BR-16 |
+| 11 | **Invitaciones rechazables, con confirmación previa** | El click del email lleva siempre a una pantalla con el detalle de la invitación; la persona decide aceptar o rechazar (estado terminal Rechazada, notifica al invitador). Aplica a los caminos B y C. | 10/06/2026 | §7.5 |
+| 12 | **Empresas solo desde la pantalla de registro** | También para usuarios existentes (inician sesión dentro del flujo y el *initial setup* omite la creación del usuario); nunca desde adentro de la app, donde la persona opera en el contexto de una empresa que puede no ser suya. | 10/06/2026 | §7.3 |
+| 13 | **Anti-enumeración estricta con UI transparente** | Respuesta pública idéntica y resolución post-OTP; la pantalla inicial anticipa solo que el email se va a verificar (sin enumerar casos especiales) y, tras validar el OTP, cada caso detectado tiene su pantalla específica (si ya hay cuenta, se ofrece iniciar sesión). Se descartó el aviso inmediato estilo "ya tenés cuenta" (Google/GitHub), que exige mitigaciones adicionales y revela información en rubros sensibles. | 10/06/2026 | §7.3 |
+| 14 | **Política de sesiones estándar** | JWT de 1 hora renovado automáticamente por el SDK; sesión larga por refresh tokens rotativos con *reuse detection*; tope de sesión opcional por proyecto vía configuración de Supabase — **nunca estirando el JWT**. La librería de tokens de FlutterFlow queda retirada para Flutter nativo. | 10/06/2026 | §8.1 |
+| 15 | **Transferencia de ownership con confirmación del receptor** | El receptor —usuario activo de la empresa— acepta o rechaza desde una pantalla de confirmación; una sola transferencia pendiente por empresa; el Owner saliente conserva el rol admin como admin común. | 10/06/2026 | §7.8, BR-17 |
+| 16 | **Parámetros del sistema con catálogo y cascada de overrides** | Cada parámetro declara en su ficha el tipo de dato, el default, hasta qué nivel admite override y quién lo edita; cascada global → empresa → sucursal donde gana el valor más específico, resuelta por una función única de lectura. Los tres niveles se implementan en la v2. | 10/06/2026 | §10.2 |
+| 17 | **Auditoría formal como entidad estándar de la v2** | Tabla de log inmutable (solo se agregan renglones, nunca se editan ni borran) de eventos sensibles: cambios de roles y permisos, invitaciones, transferencias de ownership, cambios de parámetros y overrides, acciones de superadmin. | 10/06/2026 | §10.2, §15 |
+| 18 | **Invitaciones masivas fuera del estándar de datos** | Invitar por lote es funcionalidad de producto (N invitaciones individuales, una fila cada una); no requiere ni recibe estructura especial en el modelo. | 10/06/2026 | §7.4 |
+| 19 | **Estándar de rate limiting y anti-automatización** | Límites nativos de Supabase con SMTP propio obligatorio en producción, CAPTCHA con Cloudflare Turnstile, topes de aplicación para verificación de OTP y envío de invitaciones, y prohibición del bloqueo permanente de cuentas. | 10/06/2026 | §8.2 |
+| 20 | **Tope de sesión server-side → plan Pro** | Los proyectos que necesiten *inactivity timeout* o sesiones con vencimiento fijo deben operar con plan Pro de Supabase como mínimo en producción; en Free la sesión no tiene tope server-side (aceptable si el proyecto no lo exige). El rate limiting y el CAPTCHA no dependen del plan. | 10/06/2026 | §8.1 |
+| 21 | **Un estándar, dos documentos** | Este conceptual, para todas las audiencias, y un documento técnico (v2) solo para desarrollo, que cita las reglas de acá —nunca las re-explica—, mapea cada BR y decisión a los objetos que la implementan y declara qué versión conceptual implementa. | 10/06/2026 | §1.1 |
+| 22 | **Cambios de parámetros con motivo obligatorio; doble aprobación opcional** | Todo cambio de un parámetro u override registra quién, cuándo, valor anterior, valor nuevo y un comentario obligatorio con el motivo. Los parámetros críticos pueden exigir la confirmación de un segundo superadmin (bandera de la ficha, apagada por defecto). | 11/06/2026 | §10.2 |
+| 23 | **Nomenclatura BR para las reglas de negocio** | Prefijo BR (*Business Rule*), la misma convención de los SRS de Eurekant; renombradas desde RN-XX sin cambio de numeración ni contenido (el historial conserva las menciones históricas). | 11/06/2026 | §11 |
 
 ### 13.2 Preguntas abiertas (a definir antes de la v2)
 
@@ -960,8 +967,8 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 
 ## 15. Próximos pasos
 
-1. Validar este documento con el equipo (especialmente las decisiones 15 a 21 de §13.1).
-2. **v2 — documento técnico separado (decisión 21, §1.1):** DDL completo en SQL — tablas, constraints, índices, funciones (`fn_initial_setup`, `fn_has_permission`, `fn_get_setting`), triggers de integridad (RN-03, RN-04, RN-17), FKs compuestas y defaults desde claims con `WITH CHECK` (RN-16), políticas RLS, la entidad de auditoría (decisión 17), el catálogo de parámetros con sus overrides (decisión 16) y la configuración de rate limiting y CAPTCHA (§8.2), todo según la Naming Convention Guide. Incluye la tabla de trazabilidad (cada RN y decisión → los objetos que la implementan) y declara qué versión de este documento implementa.
+1. Validar este documento con el equipo (especialmente las decisiones 15 a 23 de §13.1).
+2. **v2 — documento técnico separado (decisión 21, §1.1):** DDL completo en SQL — tablas, constraints, índices, funciones (`fn_initial_setup`, `fn_has_permission`, `fn_get_setting`), triggers de integridad (BR-03, BR-04, BR-17), FKs compuestas y defaults desde claims con `WITH CHECK` (BR-16), políticas RLS, la entidad de auditoría (decisión 17), el catálogo de parámetros con sus overrides (decisión 16) y la configuración de rate limiting y CAPTCHA (§8.2), todo según la Naming Convention Guide. Incluye la tabla de trazabilidad (cada BR y decisión → los objetos que la implementan) y declara qué versión de este documento implementa.
 3. **v3:** kit reutilizable (migraciones base + seeds del catálogo de permisos) para iniciar cualquier proyecto nuevo de Eurekant con este cimiento ya instalado.
 
 ---
@@ -978,6 +985,7 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 | 1.4.1 | 10/06/2026 | Aclaraciones conceptuales para lectores no técnicos, sin cambios de modelo ni de reglas: qué significa "respuesta pública idéntica" y qué es la enumeración de cuentas (§7.3 + glosario, con ejemplo del atacante); qué son el JWT y sus claims (§8 + glosario, con la analogía de la credencial de evento); y explicación completa del trade-off del token en §9.2 (qué se gana, qué se cede, ejemplo del cajero desvinculado). |
 | 1.5.0 | 10/06/2026 | Explicación de cómo funciona la firma del JWT (§8, analogía del cheque); requisito de UI de transparencia en el registro y justificación del criterio anti-enumeración estricto frente al aviso inmediato de la industria (§7.3, decisión 13); nueva §8.1 "Política de sesiones y renovación de tokens" tras investigación de mercado: JWT de 1 hora renovado automáticamente por el SDK, sesión larga por refresh tokens rotativos con *reuse detection*, tope opcional por inactividad/time-box (plan Pro), limpieza automática del schema `auth` y retiro de la librería de FlutterFlow (decisión 14); glosario: refresh token; preguntas abiertas nuevas: rate limiting y tope de sesión en plan Free. |
 | 1.6.0 | 10/06/2026 | Resolución de las seis preguntas abiertas de §13.2 (decisiones 15 a 20): transferencia de ownership con confirmación del receptor (nueva §7.8, RN-17 y entidad `OWNERSHIP_TRANSFERS`); catálogo de parámetros con metadatos y cascada de overrides global → empresa → sucursal (§10.2 ampliada con función única de lectura); auditoría formal como entidad estándar de la v2; invitaciones masivas fuera del estándar de datos; nueva §8.2 "Rate limiting y anti-automatización" con investigación de mercado (límites nativos de Supabase con unidades explícitas, SMTP propio obligatorio, CAPTCHA Turnstile, topes para invitaciones, sin bloqueo permanente de cuentas); tope de sesión server-side → plan Pro. Separación formal del estándar en dos documentos —conceptual y técnico— con la justificación en la nueva §1.1 (decisión 21). Glosario: rate limiting, CAPTCHA, override. Cuatro casos borde nuevos. |
+| 1.7.0 | 11/06/2026 | Renombre de las reglas de negocio RN-XX → BR-XX (decisión 23), alineando el documento con la convención de los SRS de Eurekant — numeración y contenido intactos; el historial conserva las menciones históricas a RN. §13.1 convertida a tabla con fecha de validación y referencias por decisión. Auditoría de cambios de parámetros con comentario obligatorio y doble aprobación opcional por ficha (§10.2, decisión 22). Justificación del no-reenvío de transferencias expiradas (§7.8) y referencia cruzada desde el ciclo de vida de invitaciones (§7.5). Glosario: BR. |
 
 ---
 
@@ -989,9 +997,9 @@ Una fila por aprobador de la versión en circulación (los borradores superados 
 
 | Versión | Rol | Nombre | Fecha | Estado |
 |---|---|---|---|---|
-| 1.6.0 | CEO | Franco Cruz | — | Pendiente |
-| 1.6.0 | CTO | — | — | Pendiente |
-| 1.6.0 | Líder técnico | — | — | Pendiente |
+| 1.7.0 | CEO | Franco Cruz | — | Pendiente |
+| 1.7.0 | CTO | — | — | Pendiente |
+| 1.7.0 | Líder técnico | — | — | Pendiente |
 
 ### 17.2 Auditorías y revisiones
 
@@ -1006,3 +1014,4 @@ Registro de cada revisión del documento, haya derivado o no en un cambio de ver
 | 10/06/2026 | Franco Cruz | Claridad conceptual (v1.4.0) | Cambios solicitados | Tres conceptos a aclarar para lectores no técnicos: respuesta pública idéntica / enumeración de cuentas, claims del JWT y trade-off del token. Origen de la v1.4.1. |
 | 10/06/2026 | Franco Cruz | Sesiones, tokens y anti-enumeración (v1.4.1) | Decisiones adoptadas | Con investigación de mercado (OWASP, productos líderes, docs y código de Supabase/SDK Flutter): se mantiene la anti-enumeración estricta con UI transparente (decisión 13) y se define la política de sesiones estándar (decisión 14). Rate limiting y tope de sesión en plan Free quedan como preguntas abiertas. Origen de la v1.5.0. |
 | 10/06/2026 | Franco Cruz | Preguntas abiertas de §13.2 y estructura del estándar (v1.5.0) | Decisiones adoptadas | Resolución de las seis preguntas abiertas (decisiones 15 a 20; para rate limiting, con investigación de mercado: OWASP, NIST, docs y código de Supabase) y separación del estándar en dos documentos, conceptual y técnico (decisión 21). Origen de la v1.6.0. |
+| 11/06/2026 | Franco Cruz | Transferencias, auditoría de parámetros y nomenclatura (v1.6.0) | Cambios solicitados | 5 puntos: referencia cruzada §7.5 ↔ §7.8, justificación del no-reenvío de transferencias expiradas, comentario obligatorio y doble aprobación opcional en cambios de parámetros, prefijo BR como en los SRS, y §13.1 en formato tabla. Origen de la v1.7.0. |
