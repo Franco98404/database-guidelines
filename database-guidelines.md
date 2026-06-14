@@ -1,11 +1,11 @@
 # Estandarización de Roles y Permisos — Eurekant LLC
 
-> **Versión:** 1.12.0 (conceptual — sin SQL)  
+> **Versión:** 1.13.0 (conceptual — sin SQL)  
 > **Fecha:** 13/Jun/26  
 > **Estado:** Borrador para validación interna  
 > **Alcance:** Todos los proyectos de software desarrollados por Eurekant  
-> **Tiempo estimado de lectura:** ~100 min (≈20.500 palabras)  
-> **Redactado por:** Franco Cruz, CEO  
+> **Tiempo estimado de lectura:** ~105 min (≈21.500 palabras)  
+> **Redactado por:** Franco Cruz  
 > **Elaborado por:** Eurekant LLC
 
 ---
@@ -543,7 +543,7 @@ Qué bloques usa cada camino:
 
 | Bloque | Camino A — Registro propio | Camino B — Invitación (sin cuenta) | Camino C — Invitación (con cuenta) | Camino D — Usuario final ([§7.9](#79-camino-d--registro-del-usuario-final)) |
 |---|---|---|---|---|
-| Invitación previa ([§7.4](#74-caminos-b-y-c--invitación-creación-y-envío)) | — | ✔ | ✔ | — |
+| Invitación previa ([§7.4](#74-caminos-b-y-c--invitación-creación-y-envío)) | — (puede detectarse y derivar a B/C, [§7.3](#73-camino-a--registro-por-cuenta-propia-e-initial-setup)) | ✔ | ✔ | — |
 | Verificación de email por OTP ([§7.2](#72-bloque-común-verificación-de-email-por-otp)) | ✔ | ✔ | — (ya verificó su email al crear su cuenta) | ✔ |
 | Creación de cuenta (datos + contraseña) | ✔ (se omite si ya tenía cuenta, [§7.3](#73-camino-a--registro-por-cuenta-propia-e-initial-setup)) | ✔ (datos precargados por el invitador) | — | ✔ (se omite si ya tenía cuenta, [§7.9](#79-camino-d--registro-del-usuario-final)) |
 | *Initial setup* ([§7.3](#73-camino-a--registro-por-cuenta-propia-e-initial-setup)) | ✔ | — | — | — |
@@ -567,7 +567,7 @@ Reglas del bloque:
 
 - El código tiene **vencimiento corto** y puede reenviarse (cada reenvío invalida el anterior, con una espera mínima entre reenvíos — ver [§8.2](#82-rate-limiting-y-anti-automatización)).
 - Los **intentos son limitados** (protección contra fuerza bruta y contra enumeración de cuentas; los límites concretos, en [§8.2](#82-rate-limiting-y-anti-automatización)).
-- Es **exactamente el mismo bloque** en los caminos A, B y D; en el camino B se agrega una validación extra: el email verificado debe **coincidir con el email de la invitación** (ver [§7.6](#76-camino-b--registro-por-invitación-usuario-nuevo)).
+- Es **exactamente el mismo bloque** en los caminos A, B y D; con un matiz en el camino B: el OTP se envía directamente **al email de la invitación** (el sistema ya lo conoce), no a uno que la persona tenga que volver a tipear (ver [§7.6](#76-camino-b--registro-por-invitación-usuario-nuevo)).
 - El camino C no lo necesita: ese usuario ya verificó su email cuando creó su cuenta.
 
 ### 7.3 Camino A — Registro por cuenta propia e *initial setup*
@@ -654,6 +654,15 @@ Notas:
 - Para el usuario existente **no se piden datos personales** porque ya existen en su cuenta; solo se elige sucursal y rol.
 - **Invitar a varias personas** es simplemente crear N invitaciones, una fila cada una: no existe estructura especial de "lote" en el modelo. Si algún sistema necesita una pantalla de invitación masiva (ej: importar un CSV), es funcionalidad de producto sobre este mismo mecanismo (decisión [18](#131-decisiones-confirmadas)).
 
+**Qué ve el invitado, según tenga o no cuenta.** El email y la pantalla de confirmación se adaptan al caso detectado al invitar, y se lo dicen explícitamente — mismo principio de transparencia que la resolución post-OTP del camino A ([§7.3](#73-camino-a--registro-por-cuenta-propia-e-initial-setup)):
+
+| Estado del invitado | Qué se le informa (ejemplo) |
+|---|---|
+| **Sin cuenta** → camino B ([§7.6](#76-camino-b--registro-por-invitación-usuario-nuevo)) | *"Te invitaron a **Pizzería Don Carlo** como **Cajero**. Todavía no tenés una cuenta: al aceptar la creás y entrás, todo en un solo paso."* Botón: **«Aceptar y crear mi cuenta»** (o **«Rechazar»**). |
+| **Ya tiene cuenta** → camino C ([§7.7](#77-camino-c--aceptación-o-rechazo-usuario-existente)) | *"Te invitaron a **Pizzería Don Carlo** como **Cajero**. Ya tenés una cuenta: iniciá sesión y solo tenés que aceptar o rechazar — no te registrás de nuevo."* Botones: **«Aceptar»** / **«Rechazar»**. |
+
+En ambos casos rechazar siempre está disponible desde la pantalla de confirmación ([§7.5](#75-ciclo-de-vida-de-una-invitación)); nunca se acepta automáticamente.
+
 ### 7.5 Ciclo de vida de una invitación
 
 Antes de ver los dos desenlaces (caminos B y C), los estados por los que puede pasar una invitación — el mismo ciclo de vida que después reutilizan las transferencias de ownership ([§7.8](#78-transferencia-de-ownership)):
@@ -677,8 +686,8 @@ Reglas:
 - **Revocación:** quien tenga `users.invite` puede revocar una invitación pendiente (ej: se equivocó de email o la persona ya no se incorpora). Una invitación revocada o aceptada no puede reutilizarse.
 - **Rechazo:** la persona invitada puede **rechazar** la invitación desde la pantalla de confirmación, en ambos caminos (B y C); el invitador recibe la notificación. El rechazo es terminal y la invitación no puede reutilizarse: si fue un error o la persona cambia de opinión, se crea una nueva.
 - **Unicidad:** solo puede existir **una invitación pendiente por email + empresa**. Si se quiere cambiar el rol o la sucursal antes de que la acepte, se revoca y se crea una nueva.
-- **Validaciones al crear:** no se puede invitar a un email que ya tiene asignación activa en esa misma sucursal con ese mismo rol; y el rol y la sucursal de la invitación deben pertenecer a la empresa del invitador.
-- **Validaciones al aceptar:** si entre el envío y la aceptación el rol o la sucursal fueron desactivados, la invitación se considera inválida y se informa a la persona (y al invitador) para que se genere una nueva.
+- **Validaciones al crear:** no se puede duplicar una asignación idéntica (mismo email, misma sucursal y mismo rol); pero **sí** es válido invitar a un miembro existente a otra sucursal o con otro rol —es el mecanismo normal para ampliarle accesos ([BR-15](#11-reglas-de-negocio-e-integridad-resumen-normativo))— y también a un superadmin, que es una cuenta más con otro sombrero ([§4.2](#42-usuarios-finales-la-otra-cara-del-sistema)). El rol y la sucursal de la invitación deben pertenecer a la empresa del invitador.
+- **Validaciones al aceptar:** la aceptación revalida **de forma atómica** que la invitación siga *pendiente* —no revocada, expirada ni ya aceptada— en el mismo instante en que se crea la asignación: si el invitador la revocó o expiró mientras la pantalla de confirmación estaba abierta, no se crea nada y se informa que ya no está vigente. Además, si en el ínterin el rol o la sucursal fueron desactivados, la invitación se considera inválida y se informa a la persona (y al invitador) para que se genere una nueva.
 - **Auditoría:** la fila de `INVITATIONS` refleja el estado actual; cada evento del ciclo —creación, reenvío, aceptación, rechazo, revocación— queda registrado en el log de auditoría con quién y cuándo (decisiones [17](#131-decisiones-confirmadas) y [25](#131-decisiones-confirmadas)).
 
 > 💡 **Ejemplo práctico — invitación con typo**
@@ -700,18 +709,16 @@ sequenceDiagram
         N->>S: Rechaza la invitación
         S->>S: INVITATIONS → status: rejected
         S->>I: 📧 Notificación del rechazo (§7.5)
-    else Acepta y se registra
-        N->>S: Toca "Registrarme"
-        S->>N: Pide el email al que fue invitado
-        N->>S: Ingresa el email y toca "Validar correo"
-        S->>N: 📧 OTP: código de 6 dígitos (§7.2)
-        N->>S: Ingresa el código
-        S->>S: ✅ Email verificado y coincide con la invitación
+    else Acepta y crea su cuenta
+        N->>S: Toca "Aceptar y crear mi cuenta"
+        Note over S,N: Si llega del camino A (§7.3) con la<br/>casilla ya verificada en esta sesión,<br/>se omite el OTP
+        S->>N: 📧 Envía el OTP al email de la invitación<br/>(ya lo conoce; no se re-pide — §7.2)
+        N->>S: Ingresa el código de 6 dígitos
+        S->>S: ✅ Propiedad de la casilla verificada
         S->>N: Muestra datos precargados (nombre, apellido)
         N->>S: Confirma o corrige sus datos
         N->>S: Crea su contraseña
-        S->>S: Crea USERS + USER_ROLES (usuario + rol + sucursal)
-        S->>S: INVITATIONS → status: accepted
+        S->>S: Transacción única: crea USERS + USER_ROLES<br/>+ INVITATIONS → aceptada
         S->>N: ✅ Cuenta creada, acceso a la sucursal con el rol asignado
     end
 ```
@@ -719,7 +726,9 @@ sequenceDiagram
 Detalles importantes:
 
 - El registro por invitación es **el mismo flujo** que el registro por cuenta propia (camino A), con tres diferencias: (a) llega por email en vez de iniciarse solo, (b) los datos personales vienen **precargados** por quien invitó y la persona puede corregirlos, y (c) **no se ejecuta el initial setup** ni se piden datos de empresa — la persona entra a una empresa existente, no crea una.
-- El email que la persona verifica con el OTP **debe coincidir** con el email de la invitación. Si no coincide, no se vincula la invitación.
+- **Un solo trámite, una sola transacción.** Crear la cuenta y aceptar la invitación no son dos pasos: cuando la persona termina su registro, `USERS`, `USER_ROLES` e `INVITATIONS → aceptada` se escriben **juntos, en una única transacción** (como el *initial setup*, [§7.3](#73-camino-a--registro-por-cuenta-propia-e-initial-setup)). Nunca queda una cuenta recién creada con la invitación todavía pendiente.
+- El OTP viaja **al email de la invitación** (el sistema ya lo conoce; no se le pide a la persona que lo vuelva a tipear): así se prueba que quien acepta es dueña de esa casilla, sin agregar un campo de más ni abrir la puerta a tipear otro email por error.
+- **Si la persona llega desde su propio registro** (camino A, [§7.3](#73-camino-a--registro-por-cuenta-propia-e-initial-setup)) con la casilla ya verificada en esta misma sesión, el bloque de email + OTP **no se repite**: se pasa directo a confirmar los datos precargados.
 - La persona invitada es la dueña final de sus datos: lo que el invitador escribió (nombre, apellido) es solo una sugerencia editable.
 - La pantalla a la que lleva el email muestra el detalle de la invitación y también permite **rechazarla** sin registrarse (estado Rechazada, [§7.5](#75-ciclo-de-vida-de-una-invitación)); el registro continúa solo si la persona acepta.
 - Si el email **ya tiene cuenta** al momento de abrir la invitación (la persona se registró por cuenta propia entre el envío y el click), el sistema lo detecta y el flujo se convierte en el camino C: login y aceptación, sin nuevo registro ([§7.7](#77-camino-c--aceptación-o-rechazo-usuario-existente)).
@@ -733,7 +742,8 @@ flowchart LR
     C --> D{"¿Qué decide?"}
     D -- "Acepta" --> E["Validaciones: invitación vigente,<br/>rol y sucursal activos (BR-07)"]
     E --> F["Se crea USER_ROLES:<br/>usuario + rol + sucursal"]
-    F --> G["✅ Acceso inmediato: la empresa aparece<br/>en su selector de contexto (§8)"]
+    F --> FA["INVITATIONS → aceptada (§7.5)"]
+    FA --> G["✅ Acceso inmediato: la empresa aparece<br/>en su selector de contexto (§8)"]
     D -- "Rechaza" --> H["INVITATIONS → rejected;<br/>se notifica al invitador (§7.5)"]
 ```
 
@@ -752,7 +762,8 @@ flowchart TD
     B --> C["📧 El receptor recibe la oferta:<br/>'Carlos te ofrece ser Owner<br/>de Pizzería Don Carlo'"]
     C --> D["Pantalla de confirmación:<br/>detalle de lo que implica ser Owner"]
     D --> E{"¿Qué decide?"}
-    E -- "Acepta" --> F["Transacción única:<br/>1. El receptor pasa a ser Owner<br/>2. Recibe el rol admin si no lo tenía (BR-03)<br/>3. El saliente conserva su rol admin"]
+    E -- "Acepta" --> EV["Validaciones: oferta vigente,<br/>receptor sigue activo (BR-17)"]
+    EV --> F["Transacción única:<br/>1. El receptor pasa a ser Owner<br/>2. Recibe el rol admin si no lo tenía (BR-03)<br/>3. El saliente conserva su rol admin"]
     F --> G["✅ Nuevo Owner;<br/>se notifica a ambas partes"]
     E -- "Rechaza" --> H["Transferencia → rechazada;<br/>se notifica al Owner"]
     B -.->|"El Owner puede revocarla<br/>mientras esté pendiente"| I["Transferencia → revocada"]
@@ -761,6 +772,7 @@ flowchart TD
 Reglas ([BR-17](#11-reglas-de-negocio-e-integridad-resumen-normativo)):
 
 - **El receptor debe ser un usuario activo de la empresa.** Para transferir a alguien de afuera, primero se lo invita (caminos B/C) y, una vez dentro, se le transfiere. Así no hace falta un flujo híbrido "invitación + transferencia".
+- **Revalidación al aceptar:** la aceptación revalida que el receptor **siga siendo un usuario activo** de la empresa y que la oferta siga pendiente; si lo desactivaron o removieron mientras la oferta estaba pendiente, la transferencia se invalida y se notifica al Owner (mismo criterio que la validación al aceptar de una invitación, [§7.5](#75-ciclo-de-vida-de-una-invitación)).
 - **Confirmación obligatoria del receptor:** ser Owner implica responsabilidades (es el respaldo administrativo de la empresa, [BR-03](#11-reglas-de-negocio-e-integridad-resumen-normativo)), y nadie las recibe sin aceptarlas. Misma filosofía que la decisión [11](#131-decisiones-confirmadas): nada se acepta en nombre de otro.
 - **Una sola transferencia de ownership pendiente por empresa.** Si el Owner ofreciera el título a dos personas y ambas aceptaran, ¿quién es el dueño? Para que ese conflicto sea imposible, la oferta vigente debe resolverse (aceptada, rechazada, expirada o revocada) antes de poder iniciar otra.
 - **El Owner saliente conserva el rol admin:** deja de ser el dueño pero no pierde el acceso; queda como un admin común — renunciable o removible como cualquier otro ([BR-03](#11-reglas-de-negocio-e-integridad-resumen-normativo)). El nuevo Owner decide si ajusta sus roles después.
@@ -803,6 +815,7 @@ Reglas ([BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo)):
 - **Todo evento de vinculación** (propuesta, confirmación, rechazo) queda en el log de auditoría (decisión [17](#131-decisiones-confirmadas)).
 - **Fichas duplicadas** (la misma persona cargada dos veces por el staff): se resuelven con una herramienta de **fusión** del negocio; su detalle se define en la v2.
 - **El mismo email puede después ser invitado como staff** (caminos B/C): es la misma cuenta con otro sombrero ([§4.2](#42-usuarios-finales-la-otra-cara-del-sistema)); nada se duplica.
+- **Una invitación de staff pendiente no interfiere con este camino.** Son sombreros distintos y compatibles ([§4.2](#42-usuarios-finales-la-otra-cara-del-sistema)): registrarse como usuario final no acepta ni cancela una invitación de staff pendiente, que se resuelve por su propio link (camino C, [§7.7](#77-camino-c--aceptación-o-rechazo-usuario-existente)). Ninguno prevalece sobre el otro.
 
 > 💡 **Ejemplo práctico — los puntos del mostrador**
 > María almuerza en La Parrilla del Puerto. No tiene la app, pero quiere los puntos: el mozo la registra en dos toques — nombre, DNI y teléfono (el mozo no conoce la lógica interna; para él es solo "registrar cliente"). Seis meses y varios almuerzos después, María se descarga la app y se registra con su email — que la ficha no tenía. El sistema no encuentra nada por email, así que María busca por DNI: *"Encontramos registros a tu nombre: confirmá el vínculo en tu próxima visita, o pedí un código al teléfono terminado en 21"*. María pide el código, tipea el SMS que llega al teléfono que el mozo había cargado, y sus puntos acumulados aparecen en la app. Un desconocido que tipeara el DNI de María vería la misma pantalla genérica — pero si pidiera el código, viaja al teléfono de María, no al suyo: sin ese teléfono en la mano no hay vínculo, ni puntos a la vista, ni forma de saber en qué negocios tiene fichas. Y los intentos están limitados, como todo en [§8.2](#82-rate-limiting-y-anti-automatización).
@@ -1074,7 +1087,7 @@ Estas reglas son **obligatorias** en todos los proyectos. Usan el prefijo **BR**
 | [BR-04](#11-reglas-de-negocio-e-integridad-resumen-normativo) | En `USER_ROLES`, la sucursal y el rol deben pertenecer a la **misma empresa**. |
 | [BR-05](#11-reglas-de-negocio-e-integridad-resumen-normativo) | La combinación `usuario + rol + sucursal` es única (no se duplica una asignación). |
 | [BR-06](#11-reglas-de-negocio-e-integridad-resumen-normativo) | No se puede eliminar un rol con asignaciones activas; primero se reasignan los usuarios. Toda eliminación es soft delete. |
-| [BR-07](#11-reglas-de-negocio-e-integridad-resumen-normativo) | Una invitación pendiente es única por `email + empresa`; expira (parametrizable, default 7 días); es revocable por el invitador y **rechazable por la persona invitada** (siempre media una pantalla de confirmación, nunca se acepta automáticamente); y al aceptarse valida que el rol y la sucursal sigan activos. |
+| [BR-07](#11-reglas-de-negocio-e-integridad-resumen-normativo) | Una invitación pendiente es única por `email + empresa`; expira (parametrizable, default 7 días); es revocable por el invitador y **rechazable por la persona invitada** (siempre media una pantalla de confirmación, nunca se acepta automáticamente); y al aceptarse revalida **de forma atómica** que siga pendiente (no revocada, expirada ni ya aceptada) y que el rol y la sucursal sigan activos. |
 | [BR-08](#11-reglas-de-negocio-e-integridad-resumen-normativo) | La baja de un usuario de una empresa es soft delete: pierde acceso de inmediato, el historial queda intacto y puede reactivarse. |
 | [BR-09](#11-reglas-de-negocio-e-integridad-resumen-normativo) | El email de un usuario es único y case-insensitive a nivel global del sistema. |
 | [BR-10](#11-reglas-de-negocio-e-integridad-resumen-normativo) | Los nombres de rol y de sucursal son únicos **dentro de su empresa** (case-insensitive). |
@@ -1084,7 +1097,7 @@ Estas reglas son **obligatorias** en todos los proyectos. Usan el prefijo **BR**
 | [BR-14](#11-reglas-de-negocio-e-integridad-resumen-normativo) | Los campos de auditoría (`created_by`, `updated_by`) referencian `USER_ROLES`, no `USERS`, para congelar el contexto (quién, con qué rol, en qué sucursal). Aplica a las acciones del staff; en las filas originadas por usuarios finales —que no tienen asignaciones ([BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo))— la autoría se registra contra su ficha de cliente (`COMPANY_CUSTOMERS`); y las acciones propias del superadmin (ej: parámetros del sistema, comunicados globales) contra `SUPERADMINS`. |
 | [BR-15](#11-reglas-de-negocio-e-integridad-resumen-normativo) | Un usuario puede tener varios roles en la misma sucursal, pero los permisos **nunca se combinan**: se opera bajo un único rol a la vez — el contexto activo incluye el rol (ver [§8](#8-contexto-activo-en-qué-empresa-sucursal-y-rol-estoy-parado)). |
 | [BR-16](#11-reglas-de-negocio-e-integridad-resumen-normativo) | **Prevención de inconsistencia de tenant:** las relaciones entre tablas operativas usan FKs compuestas que incluyen el tenant; `company_id`/`branch_id` nunca los escribe la aplicación; y toda política RLS de inserción/actualización incluye `WITH CHECK`. En la familia staff, el tenant se completa por defecto desde los claims del contexto activo y el `WITH CHECK` valida contra esos claims; en las escrituras de usuarios finales (identidad propia, [§9.2](#92-quién-accede-las-tres-familias-de-acceso)) el tenant sale de la operación misma —la empresa de la ficha o del perfil del catálogo sobre el que actúan— y el `WITH CHECK` valida que la fila quede atada a una ficha vinculada a su cuenta ([BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo)). Ver [§9.4](#94-tablas-operativas-y-la-columna-de-tenant-análisis-de-normalización). |
-| [BR-17](#11-reglas-de-negocio-e-integridad-resumen-normativo) | **Transferencia de ownership con confirmación:** requiere la aceptación explícita del receptor, que debe ser un usuario activo de la empresa (al aceptar recibe el rol admin si no lo tenía). Solo puede existir una transferencia pendiente por empresa; es revocable mientras esté pendiente y expira (parametrizable, default 7 días; una expirada no se reenvía — se inicia una nueva). El Owner saliente conserva el rol admin. La aceptación es una transacción única ([§7.8](#78-transferencia-de-ownership)). |
+| [BR-17](#11-reglas-de-negocio-e-integridad-resumen-normativo) | **Transferencia de ownership con confirmación:** requiere la aceptación explícita del receptor, que debe ser un usuario activo de la empresa (al aceptar recibe el rol admin si no lo tenía). Solo puede existir una transferencia pendiente por empresa; es revocable mientras esté pendiente y expira (parametrizable, default 7 días; una expirada no se reenvía — se inicia una nueva). La aceptación revalida que el receptor siga siendo un usuario activo de la empresa y que la oferta siga pendiente. El Owner saliente conserva el rol admin. La aceptación es una transacción única ([§7.8](#78-transferencia-de-ownership)). |
 | [BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo) | **El usuario final no es un rol:** no tiene filas en `ROLES`/`USER_ROLES` ni permisos del catálogo; su relación con cada negocio es una ficha de cliente (`COMPANY_CUSTOMERS`, única por `empresa + cuenta` cuando hay cuenta vinculada) y su acceso a datos es de identidad propia. La vinculación de una ficha a una cuenta exige prueba y aceptación del usuario: el email verificado basta como prueba (el vínculo se ofrece en el momento); la coincidencia por documento exige además una prueba fuerte parametrizable y nunca vincula por sí sola ni revela los datos de la ficha — solo el contacto enmascarado necesario para la prueba ([§4.2](#42-usuarios-finales-la-otra-cara-del-sistema), [§7.9](#79-camino-d--registro-del-usuario-final)). |
 | [BR-19](#11-reglas-de-negocio-e-integridad-resumen-normativo) | **Contacto provisional cargado por el staff:** el email o teléfono que un operador registra en una ficha de cliente es provisional y no verificado — no vincula la ficha a ninguna cuenta por sí solo. El sistema marca anomalías (contacto del propio operador o repetido en muchas fichas) para revisión; el contacto verificado por el dueño real lo reemplaza; los canjes de valor y la vinculación exigen prueba fuerte ([BR-18](#11-reglas-de-negocio-e-integridad-resumen-normativo), [§7.9](#79-camino-d--registro-del-usuario-final)). |
 | [BR-20](#11-reglas-de-negocio-e-integridad-resumen-normativo) | **Cuádruple de auditoría:** toda tabla lleva `created_at`, `updated_at`, `created_by` y `updated_by`. Las fechas las maneja la base (default + trigger); `created_by`/`updated_by` apuntan al actor según [BR-14](#11-reglas-de-negocio-e-integridad-resumen-normativo) (`USER_ROLES`, ficha de cliente o `SUPERADMINS`), o quedan nulos si el autor es el sistema o un autorregistro. |
@@ -1100,6 +1113,7 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 |---|---|---|
 | Verificar si un email existe al invitar | Enumeración de cuentas: cualquiera podría descubrir qué emails usan el sistema | La verificación ocurre del lado del servidor solo para usuarios con `users.invite`, con límite de intentos. La respuesta pública nunca confirma existencia de cuentas. |
 | Invitación aceptada después de que el rol/sucursal fue eliminado | Asignación rota o acceso a algo inexistente | Validación al aceptar ([BR-07](#11-reglas-de-negocio-e-integridad-resumen-normativo)): la invitación se invalida y se notifica para regenerarla. |
+| Invitación revocada o expirada mientras la persona tiene abierta la pantalla de confirmación | Se aceptaría una invitación que ya no está vigente (lectura de un estado viejo) | La aceptación revalida de forma atómica que siga pendiente; si fue revocada o expiró, no se crea la asignación y se informa que ya no está vigente ([§7.5](#75-ciclo-de-vida-de-una-invitación), [BR-07](#11-reglas-de-negocio-e-integridad-resumen-normativo)). |
 | Todos los admins se van de la empresa | Empresa inaccesible para siempre | [BR-03](#11-reglas-de-negocio-e-integridad-resumen-normativo) (regla Owner-admin): el Owner siempre es admin y nadie puede quitarle el rol, así que siempre hay al menos un admin. |
 | Eliminar un rol en uso | Usuarios sin acceso de un día para el otro | [BR-06](#11-reglas-de-negocio-e-integridad-resumen-normativo): eliminación bloqueada hasta reasignar. |
 | Usuario desvinculado conserva token JWT vigente | Acceso residual acotado (hasta 1 hora, [§8.1](#81-política-de-sesiones-y-renovación-de-tokens)) | Trade-off conocido ([§9.3](#93-cómo-funcionará-conceptual-el-detalle-va-en-la-v2)): tokens de vida corta + verificación en base para acciones críticas. |
@@ -1114,6 +1128,7 @@ Análisis de escenarios problemáticos y cómo el modelo los resuelve:
 | Pantalla de registro usada para descubrir si un email tiene cuenta | Enumeración de cuentas desde el registro | El OTP se envía siempre y la respuesta pública es idéntica en todos los casos; la existencia de cuenta o invitación pendiente solo se revela tras validar el OTP ([§7.3](#73-camino-a--registro-por-cuenta-propia-e-initial-setup)). |
 | Persona invitada como usuario nuevo se registra por cuenta propia antes de aceptar | El registro por invitación operaría sobre una cuenta que ya existe | Al abrir la invitación, el sistema detecta la cuenta y convierte el flujo en el camino C: login y aceptación ([§7.7](#77-camino-c--aceptación-o-rechazo-usuario-existente)). |
 | Owner inicia una transferencia y el receptor nunca responde | Título de Owner "colgado" en una oferta eterna | La transferencia expira (default 7 días) y es revocable mientras esté pendiente; el título no cambia hasta la aceptación ([§7.8](#78-transferencia-de-ownership), [BR-17](#11-reglas-de-negocio-e-integridad-resumen-normativo)). |
+| Receptor de una transferencia de ownership desactivado mientras la oferta está pendiente | Haría Owner a alguien que ya no es miembro de la empresa | La aceptación revalida que el receptor siga activo y que la oferta siga pendiente; si no, se invalida y se notifica al Owner ([§7.8](#78-transferencia-de-ownership), [BR-17](#11-reglas-de-negocio-e-integridad-resumen-normativo)). |
 | Bot intenta adivinar códigos OTP o tokens de invitación | Fuerza bruta sobre secretos cortos | Máx. 5 intentos por código (luego se invalida), límites por IP y CAPTCHA ([§8.2](#82-rate-limiting-y-anti-automatización)). |
 | Usuario malicioso envía invitaciones en masa | Spam saliente que arruina la reputación del dominio de email | Tope duro diario por emisor (parámetro del sistema, default 50) y revisión a partir de 10 diarias; el emisor siempre tiene email verificado ([§8.2](#82-rate-limiting-y-anti-automatización)). |
 | Atacante acumula intentos fallidos sobre el email de su víctima | Bloqueo de la cuenta ajena como ataque (DoS dirigido) | No existe el bloqueo permanente de cuentas: esperas crecientes, CAPTCHA y bloqueos temporales; la recuperación de contraseña sigue disponible ([§8.2](#82-rate-limiting-y-anti-automatización)). |
@@ -1168,6 +1183,8 @@ Todas las decisiones fueron validadas con Franco Cruz en la fecha indicada.
 | 33 | **`SYSTEM_SETTINGS`: keys conocidas, version-gating y comunicados** | Keys estándar (versión por plataforma con forzado/suave, tiendas/web, soporte, legales, `maintenance_mode`) y entidad `ANNOUNCEMENTS` para avisos con vigencia. | 13/Jun/26 | [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides), [§6](#6-modelo-de-entidades-conceptual) |
 | 34 | **Foto con placeholder en personas, empresas y sucursales** | `photo_url` + `photo_blur_hash` (miniatura borrosa instantánea). BlurHash o ThumbHash en la v2. | 13/Jun/26 | [§6](#6-modelo-de-entidades-conceptual) |
 | 35 | **Suspensión por falta de pago (`billing.status`)** | Estado de cobranza por empresa (`active`/`grace`/`suspended`) como override de `SYSTEM_SETTINGS`; en `suspended` la app se bloquea o queda en solo-lectura con aviso de pago, reversible. Distinto del cierre definitivo (`deactivated_at`). La facturación completa (facturas, vencimientos, auto-suspensión) es módulo de la v2. | 13/Jun/26 | [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides), [§12](#12-casos-borde-y-puntos-de-fuga-analizados) |
+| 36 | **Mensajería explícita al invitado** | Al invitar, el sistema detecta si el email ya tiene cuenta y se lo dice al invitado: si **ya tiene cuenta**, solo inicia sesión y acepta o rechaza (camino C); si **no tiene cuenta**, se le avisa que la creará al aceptar — registro y aceptación en un **único paso/transacción** (`USERS` + `USER_ROLES` + invitación aceptada). El OTP se envía al email de la invitación, sin re-pedirlo. Tabla de pantallas por caso en [§7.4](#74-caminos-b-y-c--invitación-creación-y-envío). | 13/Jun/26 | [§7.4](#74-caminos-b-y-c--invitación-creación-y-envío), [§7.6](#76-camino-b--registro-por-invitación-usuario-nuevo), [§7.7](#77-camino-c--aceptación-o-rechazo-usuario-existente) |
+| 37 | **Revalidación atómica al aceptar (invitaciones y transferencias)** | La aceptación de una invitación o de una transferencia de ownership revalida de forma atómica —en el mismo instante en que crea la asignación— que la oferta siga pendiente y que sus partes sigan vigentes (rol/sucursal en invitaciones; receptor activo en transferencias); si algo cambió mientras la pantalla estaba abierta, no se crea nada y se informa. Se aclara además que invitar a un miembro existente a otra sucursal o rol —o a un superadmin— es válido. | 13/Jun/26 | [§7.5](#75-ciclo-de-vida-de-una-invitación), [§7.8](#78-transferencia-de-ownership), [BR-07](#11-reglas-de-negocio-e-integridad-resumen-normativo), [BR-17](#11-reglas-de-negocio-e-integridad-resumen-normativo) |
 
 ### 13.2 Preguntas abiertas (a definir antes de la v2)
 
@@ -1226,6 +1243,7 @@ El modelo sigue los patrones de la industria para SaaS multi-tenant:
 | 1.10.0 | 13/Jun/26 | Glosario ampliado con siete términos núcleo (tenant/multi-tenancy, RLS, RBAC, soft delete, catálogo público, UUID, dato semilla). Nuevo **principio rector «ante la duda, preguntar — no asumir»** al inicio de [§1](#1-propósito-y-alcance) (decisión [29](#131-decisiones-confirmadas)). Formato de fecha unificado a `DD/MMM/YY` en todo el documento. **Referencias cruzadas clickeables**: cada `§`, `BR-NN` y `decisión N` enlaza a su sección — los `§` al anclaje exacto, `BR`/`decisión` a su tabla. Nueva **[§13.3](#133-temas-diferidos-a-la-v2) «Temas diferidos a la v2»** (fusión de fichas, umbrales del antifraude, prueba fuerte por rubro), referenciada desde [§15](#15-próximos-pasos). |
 | 1.11.0 | 13/Jun/26 | Modelo más completo y técnico: **cuádruple de auditoría** (`created_at`/`updated_at`/`created_by`/`updated_by`) en toda tabla ([BR-20](#11-reglas-de-negocio-e-integridad-resumen-normativo), decisión [31](#131-decisiones-confirmadas)) y **baja lógica por `deactivated_at`** reemplazando el booleano `is_active` ([BR-21](#11-reglas-de-negocio-e-integridad-resumen-normativo), decisión [32](#131-decisiones-confirmadas)). **Foto con placeholder** `photo_url` + `photo_blur_hash` en personas, empresas y sucursales (decisión [34](#131-decisiones-confirmadas)). `SYSTEM_SETTINGS`: keys conocidas (versión por plataforma con update forzado/suave, tiendas, soporte, legales, `maintenance_mode`) y nueva entidad **comunicados** (`ANNOUNCEMENTS`) para avisos con vigencia (decisión [33](#131-decisiones-confirmadas), [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides)). Nuevo **Anexo A — Checklist de implementación** (decisión [30](#131-decisiones-confirmadas)). [§13.3](#133-temas-diferidos-a-la-v2): diferida la segmentación de comunicados (D-04). |
 | 1.12.0 | 13/Jun/26 | Encabezado con saltos de línea reales, **tiempo estimado de lectura** (~100 min, ≈20.500 palabras a 200 wpm) y atribución (Redactado por Franco Cruz, CEO; Elaborado por Eurekant LLC). Nueva key `billing.status` para **suspensión por falta de pago** (reversible, distinta del cierre por `deactivated_at`) y caso borde de [§12](#12-casos-borde-y-puntos-de-fuga-analizados) actualizado (decisión [35](#131-decisiones-confirmadas)). Recuadro **«¿por qué clave-valor y no columnas?»** en [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides) (estándar para configuración: `wp_options`, feature flags; con la contracara de EAV). |
+| 1.13.0 | 13/Jun/26 | Revisión a fondo de la **[§7](#7-flujos-de-incorporación-de-usuarios) (flujos de incorporación)** con varios agentes de revisión: revalidación **atómica** al aceptar invitaciones y transferencias —estado pendiente y partes vigentes— ([§7.5](#75-ciclo-de-vida-de-una-invitación), [§7.8](#78-transferencia-de-ownership), [BR-07](#11-reglas-de-negocio-e-integridad-resumen-normativo), [BR-17](#11-reglas-de-negocio-e-integridad-resumen-normativo)); validez explícita de invitar a un miembro a otra sucursal/rol o a un superadmin; coexistencia de una invitación de staff pendiente con el camino D; y nodo «invitación → aceptada» en el diagrama del camino C. **Mensajería explícita al invitado** según tenga o no cuenta, con tabla de pantallas en [§7.4](#74-caminos-b-y-c--invitación-creación-y-envío); el registro por invitación se afirma como **un solo paso/transacción** y el OTP se envía al email de la invitación, sin re-pedirlo ([§7.6](#76-camino-b--registro-por-invitación-usuario-nuevo), decisiones [36](#131-decisiones-confirmadas) y [37](#131-decisiones-confirmadas)). Dos casos borde nuevos en [§12](#12-casos-borde-y-puntos-de-fuga-analizados). El punto de unificación del formato de notas y ejemplos se analizó pero se decidió mantenerlos como estaban. |
 
 ---
 
@@ -1237,9 +1255,9 @@ Una fila por aprobador de la versión en circulación (los borradores superados 
 
 | Versión | Rol | Nombre | Fecha | Estado |
 |---|---|---|---|---|
-| 1.12.0 | CEO | Franco Cruz | — | Pendiente |
-| 1.12.0 | CTO | — | — | Pendiente |
-| 1.12.0 | Líder técnico | — | — | Pendiente |
+| 1.13.0 | CEO | Franco Cruz | — | Pendiente |
+| 1.13.0 | CTO | — | — | Pendiente |
+| 1.13.0 | Líder técnico | — | — | Pendiente |
 
 ### 17.2 Auditorías y revisiones
 
@@ -1260,6 +1278,7 @@ Registro de cada revisión del documento, haya derivado o no en un cambio de ver
 | 13/Jun/26 | Franco Cruz | Glosario, principio rector, formato de fecha, navegación y temas diferidos (v1.9.0) | Cambios solicitados | 5 puntos que originaron la v1.10.0: «tenant» y otros seis términos al glosario; principio «ante la duda, preguntar — no asumir» al inicio (decisión [29](#131-decisiones-confirmadas)); formato de fecha unificado a DD/MMM/YY; referencias cruzadas clickeables (§ a la sección exacta, BR/decisión a su tabla); y nueva [§13.3](#133-temas-diferidos-a-la-v2) de temas diferidos a la v2. |
 | 13/Jun/26 | Franco Cruz | Auditoría, ciclo de vida y parametrización del sistema (v1.10.0) | Cambios solicitados | 4 puntos que originaron la v1.11.0: checklist de implementación (Anexo A, decisión [30](#131-decisiones-confirmadas)); cuádruple de auditoría en toda tabla ([BR-20](#11-reglas-de-negocio-e-integridad-resumen-normativo), decisión [31](#131-decisiones-confirmadas)); `SYSTEM_SETTINGS` con keys conocidas, version-gating y comunicados `ANNOUNCEMENTS` (decisión [33](#131-decisiones-confirmadas)) — con investigación de BlurHash/ThumbHash; y fotos con placeholder + baja lógica por `deactivated_at` (decisiones [32](#131-decisiones-confirmadas) y [34](#131-decisiones-confirmadas)). |
 | 13/Jun/26 | Franco Cruz | Auditoría en toda tabla, baja por deactivated_at, fotos y comunicados (v1.11.0) | Cambios solicitados | 4 puntos que originaron la v1.12.0: encabezado con tiempo de lectura y atribución; key `billing.status` para morosidad (decisión [35](#131-decisiones-confirmadas)); recuadro «por qué clave-valor» en [§10.2](#102-parametrización-del-sistema-system_settings-globales-y-overrides) con investigación (`wp_options`, EAV). Los pedidos de explicación conceptual de la tabla puente y de `modulo.accion` se descartaron por decisión de Franco. |
+| 13/Jun/26 | Franco Cruz | Flujos de incorporación (§7), mensajería de invitación y formato de notas/ejemplos (v1.12.0) | Cambios solicitados | 3 puntos revisados; dos originaron la v1.13.0: revisión a fondo de la [§7](#7-flujos-de-incorporación-de-usuarios) con tres agentes (huecos lógicos, consistencia diagrama-texto, claridad) — revalidación atómica al aceptar, alcance de invitaciones y consistencia de diagramas; y mensajería explícita al invitado con tabla de pantallas y registro en un solo paso (decisiones [36](#131-decisiones-confirmadas) y [37](#131-decisiones-confirmadas)). El tercer punto (unificar el formato de notas y ejemplos) se analizó pero se decidió mantenerlos como estaban. |
 
 ---
 
